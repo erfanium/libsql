@@ -16,9 +16,10 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 use libsql_server::config::{
-    AdminApiConfig, BottomlessConfig, DbConfig, HeartbeatConfig, MetaStoreConfig, RpcClientConfig,
+    BottomlessConfig, DbConfig, HeartbeatConfig, MetaStoreConfig, RpcClientConfig,
     RpcServerConfig, TlsConfig, UserApiConfig,
 };
+use libsql_server::http::user::miniturso::MinitursoConfig;
 use libsql_server::net::AddrIncoming;
 use libsql_server::version::Version;
 use libsql_server::Server;
@@ -40,7 +41,7 @@ struct Cli {
     #[clap(long, short)]
     extensions_path: Option<PathBuf>,
 
-    #[clap(long, default_value = "127.0.0.1:8080", env = "SQLD_HTTP_LISTEN_ADDR")]
+    #[clap(long, default_value = "0.0.0.0:3000", env = "SQLD_HTTP_LISTEN_ADDR")]
     http_listen_addr: SocketAddr,
 
     /// Enable a web-based http console served at the /console route.
@@ -51,9 +52,6 @@ struct Cli {
     #[clap(long, short = 'l', env = "SQLD_HRANA_LISTEN_ADDR")]
     hrana_listen_addr: Option<SocketAddr>,
 
-    /// The address and port for the admin HTTP API.
-    #[clap(long, env = "SQLD_ADMIN_LISTEN_ADDR")]
-    admin_listen_addr: Option<SocketAddr>,
 
     /// Path to a file with a JWT decoding key used to authenticate clients in the Hrana and HTTP
     /// APIs. The key is either a PKCS#8-encoded Ed25519 public key in PEM, or just plain bytes of
@@ -183,14 +181,14 @@ struct Cli {
     #[clap(long, env = "SQLD_CHECKPOINT_INTERVAL_S")]
     checkpoint_interval_s: Option<u64>,
 
-    /// By default, all request for which a namespace can't be determined fallback to the default
-    /// namespace `default`. This flag disables that.
-    #[clap(long)]
+    /// By default, all requests for which a namespace can't be determined fall back to the
+    /// default namespace `default`. This flag disables that (enabled by default).
+    #[clap(long, default_value_t = true)]
     disable_default_namespace: bool,
 
-    /// Enable the namespaces features. Namespaces are disabled by default, and all requests target
-    /// the default namespace.
-    #[clap(long)]
+    /// Enable the namespaces features. Namespaces are enabled by default, and requests are
+    /// routed by the JWT namespace claims.
+    #[clap(long, default_value_t = true)]
     enable_namespaces: bool,
 
     /// Enable snapshot at shutdown
@@ -281,9 +279,6 @@ struct Cli {
     #[clap(long)]
     enable_deadlock_monitor: bool,
 
-    /// Auth key for the admin API
-    #[clap(long, env = "LIBSQL_ADMIN_AUTH_KEY", requires = "admin_listen_addr")]
-    admin_auth_key: Option<String>,
 
     /// Whether to perform a sync of all namespaces with remote on startup
     #[clap(
@@ -306,9 +301,6 @@ struct Cli {
     )]
     sync_conccurency: usize,
 
-    /// Disable prometheus metrics collection
-    #[clap(long, env = "LIBSQL_DISABLE_METRICS")]
-    disable_metrics: bool,
 
     #[clap(subcommand)]
     subcommand: Option<UtilsSubcommands>,
@@ -493,27 +485,34 @@ async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
     })
 }
 
-async fn make_admin_api_config(config: &Cli) -> anyhow::Result<Option<AdminApiConfig>> {
-    match config.admin_listen_addr {
-        Some(addr) => {
-            let acceptor = AddrIncoming::new(tokio::net::TcpListener::bind(addr).await?);
+/// Build the MiniTurso platform configuration from the environment.
+fn make_miniturso_config(config: &Cli) -> anyhow::Result<MinitursoConfig> {
+    let admin_key = std::env::var("MINITURSO_ADMIN_KEY")
+        .unwrap_or_else(|_| "miniturso-admin-key-change-me".to_string());
+    let version = std::env::var("MINITURSO_VERSION").unwrap_or_else(|_| "dev".to_string());
+    let data_dir = std::env::var("MINITURSO_DATA_DIR")
+        .unwrap_or_else(|_| "./miniturso-data/platform".to_string());
+    let public_dir = std::env::var("MINITURSO_PUBLIC_DIR").ok();
+    let scheme = std::env::var("MINITURSO_SCHEME").unwrap_or_else(|_| "http".to_string());
+    let host = std::env::var("MINITURSO_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let connection_url = std::env::var("MINITURSO_CONNECTION_URL").ok();
+    let admin_listen_addr: SocketAddr = std::env::var("MINITURSO_ADMIN_LISTEN_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:3001".to_string())
+        .parse()
+        .context("invalid MINITURSO_ADMIN_LISTEN_ADDR")?;
 
-            tracing::info!("listening for incoming adming HTTP connection on {}", addr);
-            let connector = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .https_or_http()
-                .enable_http1()
-                .build();
-
-            Ok(Some(AdminApiConfig {
-                acceptor,
-                connector,
-                disable_metrics: config.disable_metrics,
-                auth_key: config.admin_auth_key.clone(),
-            }))
-        }
-        None => Ok(None),
-    }
+    Ok(MinitursoConfig {
+        admin_key,
+        version,
+        data_dir: PathBuf::from(data_dir),
+        sqld_data_dir: config.db_path.clone(),
+        public_dir: public_dir.map(PathBuf::from),
+        scheme,
+        host,
+        port: config.http_listen_addr.port(),
+        connection_url,
+        admin_listen_addr,
+    })
 }
 
 async fn make_rpc_server_config(config: &Cli) -> anyhow::Result<Option<RpcServerConfig>> {
@@ -659,7 +658,6 @@ async fn build_server(
 ) -> anyhow::Result<Server> {
     let db_config = make_db_config(config)?;
     let user_api_config = make_user_api_config(config).await?;
-    let admin_api_config = make_admin_api_config(config).await?;
     let rpc_server_config = make_rpc_server_config(config).await?;
     let rpc_client_config = make_rpc_client_config(config).await?;
     let heartbeat_config = make_hearbeat_config(config);
@@ -698,7 +696,6 @@ async fn build_server(
         path: config.db_path.clone().into(),
         db_config,
         user_api_config,
-        admin_api_config,
         rpc_server_config,
         rpc_client_config,
         heartbeat_config,
@@ -724,6 +721,7 @@ async fn build_server(
         force_load_wals: config.force_load_wals,
         sync_conccurency: config.sync_conccurency,
         set_log_level: Some(Box::new(set_log_level)),
+        miniturso_config: Some(make_miniturso_config(config)?),
     })
 }
 

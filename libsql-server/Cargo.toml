@@ -26,6 +26,7 @@ chrono = { version = "0.4.26", features = ["serde"] }
 clap = { version = "4.0.23", features = [ "derive", "env", "string" ] }
 console-subscriber = { git = "https://github.com/tokio-rs/console.git", rev = "5a80b98", optional = true }
 crc = "3.0.0"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 enclose = "1.1"
 fallible-iterator = "0.3.0"
 futures = "0.3.25"

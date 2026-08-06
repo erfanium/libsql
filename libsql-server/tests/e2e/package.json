@@ -1,0 +1,11 @@
+{
+  "name": "miniturso-e2e",
+  "private": true,
+  "description": "End-to-end tests for MiniTurso (libsql-server with the platform API).",
+  "scripts": {
+    "test": "node e2e.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4"
+  }
+}

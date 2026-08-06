@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hyper_rustls::TlsAcceptor;
 use libsql_replication::rpc::replication::replication_log_server::ReplicationLogServer;
-use libsql_replication::rpc::replication::{BoxReplicationService, NAMESPACE_METADATA_KEY};
+use libsql_replication::rpc::replication::BoxReplicationService;
 use rustls::server::AllowAnyAuthenticatedClient;
 use rustls::RootCertStore;
 use tonic::Status;
@@ -122,15 +122,22 @@ fn extract_namespace<T>(
         return Ok(NamespaceName::default());
     }
 
-    if let Some(namespace) = req.metadata().get_bin(NAMESPACE_METADATA_KEY) {
-        let bytes = namespace
-            .to_bytes()
-            .map_err(|_| Status::invalid_argument("Metadata can't be converted into Bytes"))?;
-        NamespaceName::from_bytes(bytes)
-            .map_err(|_| Status::invalid_argument("Invalid namespace name"))
-    } else {
-        Err(Status::invalid_argument("Missing x-namespace-bin metadata"))
+    if let Some(auth) = req.metadata().get("x-authorization") {
+        if let Ok(auth_str) = auth.to_str() {
+            let mut split = auth_str.split_whitespace();
+            if let (Some(scheme), Some(token)) = (split.next(), split.next()) {
+                if scheme.eq_ignore_ascii_case("bearer") {
+                    if let Some(ns) =
+                        crate::auth::user_auth_strategies::jwt::extract_namespace_from_token(token)
+                    {
+                        return Ok(ns);
+                    }
+                }
+            }
+        }
     }
+
+    Err(Status::invalid_argument("Missing namespace in authorization token"))
 }
 
 fn trace_request<B>(req: &hyper::Request<B>, span: &Span) {

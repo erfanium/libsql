@@ -3,6 +3,7 @@ mod dump;
 mod extract;
 mod hrana_over_http_1;
 mod listen;
+pub mod miniturso;
 mod result_builder;
 mod trace;
 mod types;
@@ -50,10 +51,10 @@ use crate::query_result_builder::QueryResultBuilder;
 use crate::rpc::proxy::rpc::proxy_server::{Proxy, ProxyServer};
 use crate::schema::{MigrationDetails, MigrationSummary};
 use crate::utils::services::idle_shutdown::IdleShutdownKicker;
-use crate::version;
 use crate::{hrana, TaskManager};
 
 use self::db_factory::MakeConnectionExtractor;
+use self::miniturso::MinitursoState;
 use self::result_builder::JsonHttpPayloadBuilder;
 use self::types::QueryObject;
 
@@ -89,7 +90,7 @@ struct RowsResponse {
     rows: Vec<Vec<serde_json::Value>>,
 }
 
-fn parse_queries(queries: Vec<QueryObject>) -> crate::Result<Vec<Query>> {
+pub(crate) fn parse_queries(queries: Vec<QueryObject>) -> crate::Result<Vec<Query>> {
     let mut out = Vec::with_capacity(queries.len());
     for query in queries {
         let mut iter = Statement::parse(&query.q);
@@ -168,12 +169,19 @@ async fn handle_health() -> Response<Body> {
     Response::new(Body::empty())
 }
 
+async fn handle_fallback() -> impl IntoResponse {
+    (StatusCode::NOT_FOUND).into_response()
+}
+
 async fn handle_upgrade(
     AxumState(AppState { upgrade_tx, .. }): AxumState<AppState>,
     req: Request<Body>,
-) -> impl IntoResponse {
+) -> Response<Body> {
     if !hyper_tungstenite::is_upgrade_request(&req) {
-        return StatusCode::NOT_FOUND.into_response();
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap();
     }
 
     let (response_tx, response_rx) = oneshot::channel();
@@ -185,22 +193,18 @@ async fn handle_upgrade(
         .await;
 
     match response_rx.await {
-        Ok(response) => response.into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "sqld was not able to process the HTTP upgrade",
-        )
-            .into_response(),
+        Ok(response) => response,
+        Err(_) => Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .body(Body::from("sqld was not able to process the HTTP upgrade"))
+            .unwrap(),
     }
 }
 
 async fn handle_version() -> Response<Body> {
-    let version = version::version();
-    Response::new(Body::from(version))
-}
-
-async fn handle_fallback() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND).into_response()
+    let version = std::env::var("MINITURSO_VERSION").unwrap_or_else(|_| "dev".to_string());
+    let body = serde_json::json!({ "version": version }).to_string();
+    Response::new(Body::from(body))
 }
 
 async fn handle_hrana_pipeline(
@@ -240,6 +244,7 @@ pub(crate) struct AppState {
     disable_default_namespace: bool,
     disable_namespaces: bool,
     primary_url: Option<String>,
+    miniturso: Option<Arc<MinitursoState>>,
 }
 
 pub struct UserApi<A, P, S> {
@@ -256,6 +261,7 @@ pub struct UserApi<A, P, S> {
     pub enable_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
+    pub miniturso_config: Option<miniturso::MinitursoConfig>,
 }
 
 impl<A, P, S> UserApi<A, P, S>
@@ -311,6 +317,17 @@ where
         }
 
         if let Some(acceptor) = self.http_acceptor {
+            let miniturso = match self.miniturso_config {
+                Some(config) => match miniturso::Metadata::open(&config.data_dir) {
+                    Ok(metadata) => Some(Arc::new(MinitursoState { config, metadata })),
+                    Err(e) => {
+                        tracing::error!("failed to open miniturso metadata store: {}", e);
+                        None
+                    }
+                },
+                None => None,
+            };
+
             let state = AppState {
                 user_auth_strategy: self.user_auth_strategy,
                 upgrade_tx: hrana_upgrade_tx,
@@ -320,7 +337,25 @@ where
                 disable_default_namespace: self.disable_default_namespace,
                 disable_namespaces: self.disable_namespaces,
                 primary_url: self.primary_url.clone(),
+                miniturso,
             };
+
+            // Serve the admin router (dashboard + API) on its own listener.
+            if let Some(miniturso) = &state.miniturso {
+                let admin_addr = miniturso.config.admin_listen_addr;
+                let admin_router =
+                    miniturso::admin_router(Some(miniturso.clone()), state.clone());
+                task_manager.spawn_until_shutdown(async move {
+                    let listener = tokio::net::TcpListener::bind(admin_addr).await?;
+                    let admin_acceptor = crate::net::AddrIncoming::new(listener);
+                    tracing::info!("listening for admin HTTP connection on {}", admin_addr);
+                    hyper::server::Server::builder(admin_acceptor)
+                        .serve(admin_router.into_make_service())
+                        .await
+                        .context("admin http server")?;
+                    Ok(())
+                });
+            }
 
             macro_rules! handle_hrana {
                 ($endpoint:expr, $version:expr, $encoding:expr,) => {{
@@ -346,12 +381,14 @@ where
                 }};
             }
 
+            let miniturso_fallback = state.miniturso.clone();
             let app = Router::new()
                 .route("/", post(handle_query))
                 .route("/", get(handle_upgrade))
                 .route("/version", get(handle_version))
                 .route("/console", get(show_console))
                 .route("/health", get(handle_health))
+                .route("/info", get(miniturso::handle_info))
                 .route("/dump", get(dump::handle_dump))
                 .route("/beta/listen", get(listen::handle_listen))
                 .route("/v1", get(hrana_over_http_1::handle_index))

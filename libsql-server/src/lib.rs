@@ -26,7 +26,7 @@ use crate::stats::Stats;
 use anyhow::Context as AnyhowContext;
 use auth::Auth;
 use config::{
-    AdminApiConfig, DbConfig, HeartbeatConfig, RpcClientConfig, RpcServerConfig, UserApiConfig,
+    DbConfig, HeartbeatConfig, RpcClientConfig, RpcServerConfig, UserApiConfig,
 };
 use futures::future::ready;
 use futures::Future;
@@ -78,7 +78,7 @@ mod error;
 mod h2c;
 mod heartbeat;
 mod hrana;
-mod http;
+pub mod http;
 mod metrics;
 mod migration;
 mod namespace;
@@ -130,7 +130,6 @@ pub struct Server<C = HttpConnector, A = AddrIncoming, D = HttpsConnector<HttpCo
     pub path: Arc<Path>,
     pub db_config: DbConfig,
     pub user_api_config: UserApiConfig<A>,
-    pub admin_api_config: Option<AdminApiConfig<A, D>>,
     pub rpc_server_config: Option<RpcServerConfig<A>>,
     pub rpc_client_config: Option<RpcClientConfig<C>>,
     pub idle_shutdown_timeout: Option<Duration>,
@@ -151,6 +150,10 @@ pub struct Server<C = HttpConnector, A = AddrIncoming, D = HttpsConnector<HttpCo
     pub force_load_wals: bool,
     pub sync_conccurency: usize,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
+    /// MiniTurso platform configuration. When set, the platform admin API
+    /// (`/api/databases`, ...), `/version` and static UI are served on the
+    /// user HTTP port.
+    pub miniturso_config: Option<crate::http::user::miniturso::MinitursoConfig>,
 }
 
 impl<C, A, D> Default for Server<C, A, D> {
@@ -159,7 +162,6 @@ impl<C, A, D> Default for Server<C, A, D> {
             path: PathBuf::from("data.sqld").into(),
             db_config: Default::default(),
             user_api_config: Default::default(),
-            admin_api_config: Default::default(),
             rpc_server_config: Default::default(),
             rpc_client_config: Default::default(),
             idle_shutdown_timeout: Default::default(),
@@ -180,22 +182,23 @@ impl<C, A, D> Default for Server<C, A, D> {
             force_load_wals: false,
             sync_conccurency: 8,
             set_log_level: None,
+            miniturso_config: None,
         }
     }
 }
 
-struct Services<A, P, S, C> {
+struct Services<A, P, S> {
     namespace_store: NamespaceStore,
     idle_shutdown_kicker: Option<IdleShutdownKicker>,
     proxy_service: P,
     replication_service: S,
     user_api_config: UserApiConfig<A>,
-    admin_api_config: Option<AdminApiConfig<A, C>>,
     disable_namespaces: bool,
     disable_default_namespace: bool,
     db_config: DbConfig,
     user_auth_strategy: Auth,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
+    pub miniturso_config: Option<crate::http::user::miniturso::MinitursoConfig>,
 }
 
 struct TaskManager {
@@ -268,12 +271,11 @@ impl TaskManager {
     }
 }
 
-impl<A, P, S, C> Services<A, P, S, C>
+impl<A, P, S> Services<A, P, S>
 where
     A: crate::net::Accept,
     P: Proxy,
     S: ReplicationLog,
-    C: Connector,
 {
     fn configure(mut self, task_manager: &mut TaskManager) {
         let user_http = UserApi {
@@ -290,30 +292,10 @@ where
             enable_console: self.user_api_config.enable_http_console,
             self_url: self.user_api_config.self_url,
             primary_url: self.user_api_config.primary_url,
+            miniturso_config: self.miniturso_config,
         };
 
-        let user_http_service = user_http.configure(task_manager);
-
-        if let Some(AdminApiConfig {
-            acceptor,
-            connector,
-            disable_metrics,
-            auth_key,
-        }) = self.admin_api_config
-        {
-            task_manager.spawn_with_shutdown_notify(|shutdown| {
-                http::admin::run(
-                    acceptor,
-                    user_http_service,
-                    self.namespace_store,
-                    connector,
-                    disable_metrics,
-                    shutdown,
-                    auth_key.map(Into::into),
-                    self.set_log_level.take(),
-                )
-            });
-        }
+        user_http.configure(task_manager);
     }
 }
 
@@ -516,19 +498,19 @@ where
         proxy_service: P,
         replication_service: L,
         user_auth_strategy: Auth,
-    ) -> Services<A, P, L, D> {
+    ) -> Services<A, P, L> {
         Services {
             namespace_store,
             idle_shutdown_kicker,
             proxy_service,
             replication_service,
             user_api_config: self.user_api_config,
-            admin_api_config: self.admin_api_config,
             disable_namespaces: self.disable_namespaces,
             disable_default_namespace: self.disable_default_namespace,
             db_config: self.db_config,
             user_auth_strategy,
             set_log_level: self.set_log_level.take(),
+            miniturso_config: self.miniturso_config,
         }
     }
 

@@ -105,6 +105,48 @@ fn validate_any_jwt(
     Err(AuthError::JwtInvalid)
 }
 
+/// Extract the namespace claimed by an *unverified* JWT token.
+///
+/// This is used to determine which namespace a request targets before the
+/// token is verified against that namespace's configured JWT key. The
+/// namespace is taken from the authorized scopes (`p.rw.ns`, `p.ro.ns`,
+/// `p.roa.ns`, `p.rwa.ns`) or, for legacy tokens, from the `id` claim.
+pub fn extract_namespace_from_token(token: &str) -> Option<NamespaceName> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let signature = parts.next()?;
+    if signature.is_empty() || parts.next().is_some() {
+        return None;
+    }
+
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims: Token = serde_json::from_slice(&decoded).ok()?;
+
+    let Some(authorized) = claims.p else {
+        return claims.id;
+    };
+
+    for scope in [
+        authorized.read_write.as_ref(),
+        authorized.read_only.as_ref(),
+        authorized.read_only_attach.as_ref(),
+        authorized.read_write_attach.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(ns) = scope.namespaces.as_ref().and_then(|ns| ns.iter().next()) {
+            return Some(ns.clone());
+        }
+    }
+
+    None
+}
+
 fn validate_jwt(
     jwt_key: &jsonwebtoken::DecodingKey,
     jwt: &str,
