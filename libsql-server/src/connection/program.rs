@@ -135,6 +135,11 @@ where
         &self.program.steps()[self.current_step]
     }
 
+    /// Index of the step that is about to be executed.
+    pub fn current_step_index(&self) -> usize {
+        self.current_step
+    }
+
     pub fn step(&mut self, conn: &rusqlite::Connection) -> crate::Result<bool> {
         match self.try_step(conn) {
             Ok(res) => {

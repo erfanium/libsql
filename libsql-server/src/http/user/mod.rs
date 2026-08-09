@@ -235,7 +235,7 @@ async fn handle_hrana_pipeline(
 /// Router wide state that each request has access too via
 /// axum's `State` extractor.
 #[derive(Clone)]
-pub(crate) struct AppState {
+pub struct AppState {
     user_auth_strategy: Auth,
     namespaces: NamespaceStore,
     upgrade_tx: mpsc::Sender<hrana::ws::Upgrade>,
@@ -381,7 +381,6 @@ where
                 }};
             }
 
-            let miniturso_fallback = state.miniturso.clone();
             let app = Router::new()
                 .route("/", post(handle_query))
                 .route("/", get(handle_upgrade))

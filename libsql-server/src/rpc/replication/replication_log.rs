@@ -255,7 +255,7 @@ impl ReplicationLog for ReplicationLogService {
         self.authenticate(&req, namespace.clone()).await?;
 
         let (logger, _, _, stats, config_changed) =
-            self.logger_from_namespace(namespace, &req, true).await?;
+            self.logger_from_namespace(namespace.clone(), &req, true).await?;
 
         let stats = if self.collect_stats {
             Some(stats)
@@ -266,8 +266,15 @@ impl ReplicationLog for ReplicationLogService {
         let req = req.into_inner();
 
         let mut stream = StreamGuard::new(
-            FrameStream::new(logger, req.next_offset, true, None, stats)
-                .map_err(|e| Status::internal(e.to_string()))?,
+            FrameStream::new_with_namespace(
+                logger,
+                req.next_offset,
+                true,
+                None,
+                stats,
+                Some(namespace.clone()),
+            )
+            .map_err(|e| Status::internal(e.to_string()))?,
             self.idle_shutdown_layer.clone(),
         )
         .map(map_frame_stream_output);
@@ -301,7 +308,7 @@ impl ReplicationLog for ReplicationLogService {
         let namespace = super::super::extract_namespace(self.disable_namespaces, &req)?;
         self.authenticate(&req, namespace.clone()).await?;
 
-        let (logger, _, _, stats, _) = self.logger_from_namespace(namespace, &req, true).await?;
+        let (logger, _, _, stats, _) = self.logger_from_namespace(namespace.clone(), &req, true).await?;
 
         let stats = if self.collect_stats {
             Some(stats)
@@ -312,12 +319,13 @@ impl ReplicationLog for ReplicationLogService {
         let req = req.into_inner();
 
         let frames = StreamGuard::new(
-            FrameStream::new(
+            FrameStream::new_with_namespace(
                 logger,
                 req.next_offset,
                 false,
                 Some(MAX_FRAMES_PER_BATCH),
                 stats,
+                Some(namespace.clone()),
             )
             .map_err(|e| Status::internal(e.to_string()))?,
             self.idle_shutdown_layer.clone(),

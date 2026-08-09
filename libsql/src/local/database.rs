@@ -394,6 +394,17 @@ impl Database {
     }
 
     #[cfg(feature = "replication")]
+    /// Lock-free clone progress: (frames synced, target frames). Safe to call
+    /// while `sync` is still running.
+    pub fn sync_progress(&self) -> (usize, u64) {
+        if let Some(ctx) = &self.replication_ctx {
+            ctx.replicator.sync_progress()
+        } else {
+            (0, 0)
+        }
+    }
+
+    #[cfg(feature = "replication")]
     /// Return detailed logs about bytes synced with primary
     pub async fn get_sync_usage_stats(&self) -> Result<SyncUsageStats> {
         if let Some(ctx) = &self.replication_ctx {

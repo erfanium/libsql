@@ -36,7 +36,6 @@ RUN if [ "$ENABLE_FEATURES" == "" ]; then \
     else \
         cargo build -p libsql-server --features "$ENABLE_FEATURES" --release --locked ; \
     fi
-RUN cargo build -p bottomless-cli --release --locked
 
 # official gosu install instruction (https://github.com/tianon/gosu/blob/master/INSTALL.md)
 FROM debian:bullseye-slim as gosu
@@ -95,7 +94,6 @@ COPY docker-wrapper.sh /usr/local/bin
 COPY --from=gosu /usr/local/bin/gosu /usr/local/bin/gosu
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /target/release/sqld /bin/sqld
-COPY --from=builder /target/release/bottomless-cli /bin/bottomless-cli
 
 COPY admin-ui /admin-ui
 

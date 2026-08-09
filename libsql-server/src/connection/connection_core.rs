@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,6 +14,7 @@ use crate::namespace::broadcasters::BroadcasterHandle;
 use crate::namespace::meta_store::MetaStoreHandle;
 use crate::namespace::ResolveNamespacePathFn;
 use crate::query_analysis::StmtKind;
+use crate::query_registry;
 use crate::query_result_builder::{QueryBuilderConfig, QueryResultBuilder};
 use crate::replication::FrameNo;
 use crate::stats::{Stats, StatsUpdateMessage};
@@ -37,6 +38,9 @@ pub(super) struct CoreConnection<W> {
     broadcaster: BroadcasterHandle,
     hooked: bool,
     canceled: Arc<AtomicBool>,
+    /// Set by `run_async` while a query is executing on this connection; used
+    /// by the progress handler to update the query registry heartbeat.
+    registry_key: Arc<AtomicUsize>,
 }
 
 fn update_stats(
@@ -89,13 +93,29 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
 
         let canceled = Arc::new(AtomicBool::new(false));
 
+        let registry_key = Arc::new(AtomicUsize::new(0));
+
         conn.progress_handler(100, {
             let canceled = canceled.clone();
+            let registry_key = registry_key.clone();
+            let mut last_heartbeat = Instant::now();
             Some(move || {
                 let canceled = canceled.load(Ordering::Relaxed);
                 if canceled {
                     QUERY_CANCELED.increment(1);
                     tracing::trace!("request canceled");
+                }
+                // Cheap liveness heartbeat: the progress handler only runs
+                // while SQLite is actively executing, so a stale heartbeat
+                // means the query is parked (e.g. waiting for the write lock)
+                // or stuck in IO, not burning CPU.
+                let key = registry_key.load(Ordering::Relaxed);
+                if key != 0 {
+                    let now = Instant::now();
+                    if now.duration_since(last_heartbeat) >= query_registry::HEARTBEAT_INTERVAL {
+                        last_heartbeat = now;
+                        query_registry::heartbeat(key);
+                    }
                 }
                 canceled
             })
@@ -112,6 +132,7 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
             broadcaster,
             hooked: false,
             canceled,
+            registry_key,
             get_current_frame_no,
         };
 
@@ -168,13 +189,25 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
 
         PROGRAM_EXEC_COUNT.increment(1);
 
+        // Register the query in the process list. The guard is moved into the
+        // blocking closure so the entry lives until the query actually
+        // finishes (also when the outer future is canceled).
+        let key = Arc::as_ptr(&this) as usize;
+        let namespace = this.lock().config_store.namespace().clone();
+        this.lock().registry_key.store(key, Ordering::Relaxed);
+        let guard = query_registry::register(key, namespace, &pgm);
+
         // create the bomb right before spawning the blocking task.
         let mut bomb = Bomb {
             canceled,
             defused: false,
         };
-        let ret = BLOCKING_RT
-            .spawn_blocking(move || CoreConnection::run(this, pgm, builder))
+        let (ret, _guard) = BLOCKING_RT
+            .spawn_blocking(move || {
+                query_registry::set_thread_info(key);
+                let ret = CoreConnection::run(this, pgm, builder);
+                (ret, guard)
+            })
             .await
             .unwrap();
 
@@ -232,12 +265,20 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
         );
 
         let mut has_timeout = false;
+        let steps = pgm.steps();
+        let key = Arc::as_ptr(&this) as usize;
         while !vm.finished() {
             let mut conn = this.lock();
 
             if conn.forced_rollback {
                 has_timeout = true;
                 conn.forced_rollback = false;
+            }
+
+            let step_idx = vm.current_step_index();
+            let sql = steps.get(step_idx).map(|s| s.query.stmt.stmt.as_str());
+            if let Some(sql) = sql {
+                query_registry::touch(key, step_idx, steps.len(), sql);
             }
 
             // once there was a timeout, invalidate all the program steps
@@ -414,6 +455,7 @@ mod test {
             broadcaster: Default::default(),
             hooked: false,
             canceled: Arc::new(false.into()),
+            registry_key: Arc::new(AtomicUsize::new(0)),
             get_current_frame_no: Arc::new(|| None),
         };
 

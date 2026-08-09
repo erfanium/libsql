@@ -23,6 +23,9 @@ const DEFAULT_MAX_RETRIES: usize = 5;
 const DEFAULT_PUSH_BATCH_SIZE: u32 = 128;
 const DEFAULT_PULL_BATCH_SIZE: u32 = 128;
 
+/// When set, the embedded replica refuses to push frames to the remote server.
+const DISABLE_PUSH_ENV: &str = "LIBSQL_DISABLE_FRAME_PUSH";
+
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum SyncError {
@@ -72,6 +75,8 @@ pub enum SyncError {
     InvalidRemoteState(String),
     #[error("server returned invalid length of frames: {0}")]
     InvalidPullFrameBytes(usize),
+    #[error("frame push is disabled (LIBSQL_DISABLE_FRAME_PUSH is set)")]
+    PushDisabled,
 }
 
 impl SyncError {
@@ -138,6 +143,8 @@ pub struct SyncContext {
     initial_server_sync: bool,
     /// The encryption context for the sync.
     remote_encryption: Option<EncryptionContext>,
+    /// Whether the replica is allowed to push frames to the remote server.
+    push_enabled: bool,
 }
 
 impl SyncContext {
@@ -170,6 +177,7 @@ impl SyncContext {
             durable_frame_num: 0,
             initial_server_sync: false,
             remote_encryption,
+            push_enabled: !push_disabled_by_env(),
         };
         me.read_metadata().await?;
         Ok(me)
@@ -885,6 +893,10 @@ async fn try_push(
     sync_ctx: &mut SyncContext,
     conn: &Connection,
 ) -> Result<crate::database::Replicated> {
+    if !sync_ctx.push_enabled {
+        return Err(Error::Sync(Box::new(SyncError::PushDisabled)));
+    }
+
     let page_size = {
         let rows = conn
             .query("PRAGMA page_size", crate::params::Params::None)?
@@ -1054,4 +1066,14 @@ fn check_if_file_exists(path: &str) -> core::result::Result<bool, SyncError> {
     Path::new(&path)
         .try_exists()
         .map_err(SyncError::io("metadata file exists"))
+}
+
+fn push_disabled_by_env() -> bool {
+    match std::env::var(DISABLE_PUSH_ENV) {
+        Ok(v) => {
+            let v = v.trim().to_lowercase();
+            !v.is_empty() && v != "0" && v != "false"
+        }
+        Err(_) => false,
+    }
 }

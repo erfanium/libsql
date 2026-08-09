@@ -86,6 +86,7 @@ mod pager;
 mod query;
 mod query_analysis;
 mod query_result_builder;
+mod query_registry;
 mod replication;
 mod schema;
 mod stats;

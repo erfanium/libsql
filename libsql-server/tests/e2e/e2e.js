@@ -101,6 +101,40 @@ describe("MiniTurso E2E", { concurrency: false }, () => {
     assert.ok(response.databases.some(database => database.id === dbId));
   });
 
+  it("returns the same access token until it is regenerated", async () => {
+    const first = await fetchApi("GET", `/api/databases/${dbId}/token`);
+    assert.equal(first.token, token);
+
+    const again = await fetchApi("GET", `/api/databases/${dbId}/token`);
+    assert.equal(again.token, first.token);
+  });
+
+  it("returns the regenerated token after rotation", async () => {
+    const database = await fetchApi("POST", "/api/databases", {
+      id: `e2etoken${Date.now().toString(36)}`,
+    });
+
+    try {
+      const before = await fetchApi("GET", `/api/databases/${database.id}/token`);
+      assert.equal(before.token, database.token);
+
+      const rotated = await fetchApi("POST", `/api/databases/${database.id}/token`);
+      assert.notEqual(rotated.token, database.token);
+
+      const afterRotate = await fetchApi("GET", `/api/databases/${database.id}/token`);
+      assert.equal(afterRotate.token, rotated.token);
+    } finally {
+      await fetchApi("DELETE", `/api/databases/${database.id}`);
+    }
+  });
+
+  it("returns 404 when fetching the token of an unknown database", async () => {
+    const response = await fetch(`${ADMIN_URL}/api/databases/does-not-exist/token`, {
+      headers: { "Authorization": `Bearer ${ADMIN_KEY}` },
+    });
+    assert.equal(response.status, 404);
+  });
+
   it("reports the deployed image version", async () => {
     const response = await fetch(`${BASE_URL}/version`);
     assert.equal(response.ok, true);
@@ -148,6 +182,41 @@ describe("MiniTurso E2E", { concurrency: false }, () => {
       "SELECT count(*) AS cnt FROM e2e_test",
     ]);
     assert.ok(batch[2].rows[0].cnt >= 5);
+  });
+
+  it("executes SQL through the admin Hrana pipeline against any namespace", async () => {
+    const response = await fetch(`${ADMIN_URL}/admin/v3/pipeline?ns=${dbId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${ADMIN_KEY}`,
+      },
+      body: JSON.stringify({
+        requests: [
+          { type: "execute", stmt: { sql: "CREATE TABLE IF NOT EXISTS admin_pipeline (id INTEGER PRIMARY KEY, v TEXT)" } },
+          { type: "execute", stmt: { sql: "INSERT INTO admin_pipeline (v) VALUES ('via admin pipeline')" } },
+        ],
+      }),
+    });
+    assert.equal(response.ok, true, `admin pipeline status ${response.status}`);
+    const body = await response.json();
+    assert.ok(Array.isArray(body.results));
+    assert.equal(body.results.length, 2);
+
+    const check = await sqlQuery(token, "SELECT v FROM admin_pipeline");
+    assert.deepEqual(check[0].results.rows, [["via admin pipeline"]]);
+  });
+
+  it("rejects admin Hrana pipeline with a bad admin key", async () => {
+    const response = await fetch(`${ADMIN_URL}/admin/v3/pipeline?ns=${dbId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer wrong-admin-key",
+      },
+      body: JSON.stringify({ requests: [] }),
+    });
+    assert.equal(response.status, 401);
   });
 
   it.skip("executes SQL through Hrana over WebSocket (MiniTurso does not expose WebSocket)", async () => {

@@ -16,6 +16,7 @@ libsql-sqlite3/**.o.tmp
 # MiniTurso platform
 miniturso-data/
 data.sqld/
+/dev.sh
 .codegraph/
 libsql-server/tests/e2e/node_modules/
 libsql-server/tests/e2e/local.db
@@ -23,3 +24,4 @@ libsql-server/tests/e2e/local.db
 # staged admin UI build for the container image
 /admin-ui/
 /sqld-release/
+/tools/__pycache__/

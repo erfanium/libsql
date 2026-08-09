@@ -99,7 +99,6 @@ async fn configure_server(
             connection_creation_timeout: None,
             disable_intelligent_throttling: false,
         },
-        admin_api_config: None,
         disable_namespaces: true,
         user_api_config: UserApiConfig {
             hrana_ws_acceptor: None,

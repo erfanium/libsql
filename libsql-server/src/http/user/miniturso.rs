@@ -9,11 +9,12 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use axum::extract::{Path as AxumPath, State as AxumState};
+use axum::extract::{Path as AxumPath, Query, State, State as AxumState};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -27,10 +28,12 @@ use rusqlite::Connection as SqliteConnection;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
+use tokio::sync::Mutex;
 
 use crate::auth::Authenticated;
 use crate::connection::config::DatabaseConfig;
 use crate::connection::{Connection, RequestContext};
+use crate::hrana;
 use crate::namespace::{NamespaceName, RestoreOption};
 use crate::query::Params;
 
@@ -81,6 +84,10 @@ pub struct DatabaseRecord {
     pub namespace: String,
     pub jwt_public_key: String,
     pub jwt_private_key: String,
+    /// The app access token (full rw/ro permissions), returned verbatim by
+    /// `GET /api/databases/:id/token` until the token is regenerated.
+    #[serde(skip_serializing)]
+    pub token: String,
     pub created_at: String,
     pub last_accessed_at: Option<String>,
 }
@@ -91,8 +98,9 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<DatabaseRecord> {
         namespace: row.get(1)?,
         jwt_public_key: row.get(2)?,
         jwt_private_key: row.get(3)?,
-        created_at: row.get(4)?,
-        last_accessed_at: row.get(5)?,
+        token: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        created_at: row.get(5)?,
+        last_accessed_at: row.get(6)?,
     })
 }
 
@@ -112,69 +120,85 @@ impl Metadata {
                 namespace TEXT UNIQUE NOT NULL,
                 jwt_public_key TEXT NOT NULL,
                 jwt_private_key TEXT NOT NULL,
+                token TEXT,
                 created_at TEXT NOT NULL,
                 last_accessed_at TEXT
             )",
         )?;
+        // Schema migration for stores created before the token column.
+        // The column stays nullable; it is filled in when a token is
+        // regenerated (create / rename / rotate).
+        let has_token = {
+            let mut stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('databases') WHERE name = 'token'",
+            )?;
+            let count: i64 = stmt.query_row([], |row| row.get(0))?;
+            count > 0
+        };
+        if !has_token {
+            conn.execute_batch("ALTER TABLE databases ADD COLUMN token TEXT")?;
+        }
         Ok(Self {
             db: Mutex::new(conn),
         })
     }
 
-    pub fn insert(&self, record: &DatabaseRecord) -> anyhow::Result<()> {
-        let conn = self.db.lock().unwrap();
+    pub async fn insert(&self, record: &DatabaseRecord) -> anyhow::Result<()> {
+        let conn = self.db.lock().await;
         conn.execute(
-            "INSERT INTO databases (id, namespace, jwt_public_key, jwt_private_key, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO databases (id, namespace, jwt_public_key, jwt_private_key, token, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 record.id,
                 record.namespace,
                 record.jwt_public_key,
                 record.jwt_private_key,
+                record.token,
                 record.created_at
             ],
         )?;
         Ok(())
     }
 
-    pub fn get(&self, id: &str) -> anyhow::Result<Option<DatabaseRecord>> {
-        let conn = self.db.lock().unwrap();
+    pub async fn get(&self, id: &str) -> anyhow::Result<Option<DatabaseRecord>> {
+        let conn = self.db.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, namespace, jwt_public_key, jwt_private_key, created_at, last_accessed_at
+            "SELECT id, namespace, jwt_public_key, jwt_private_key, token, created_at, last_accessed_at
              FROM databases WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map([id], row_to_record)?;
         Ok(rows.next().transpose()?)
     }
 
-    pub fn list(&self) -> anyhow::Result<Vec<DatabaseRecord>> {
-        let conn = self.db.lock().unwrap();
+    pub async fn list(&self) -> anyhow::Result<Vec<DatabaseRecord>> {
+        let conn = self.db.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, namespace, jwt_public_key, jwt_private_key, created_at, last_accessed_at
+            "SELECT id, namespace, jwt_public_key, jwt_private_key, token, created_at, last_accessed_at
              FROM databases ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_record)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn delete(&self, id: &str) -> anyhow::Result<()> {
-        let conn = self.db.lock().unwrap();
+    pub async fn delete(&self, id: &str) -> anyhow::Result<()> {
+        let conn = self.db.lock().await;
         conn.execute("DELETE FROM databases WHERE id = ?1", [id])?;
         Ok(())
     }
 
-    pub fn replace(&self, old_id: &str, record: &DatabaseRecord) -> anyhow::Result<()> {
-        let conn = self.db.lock().unwrap();
+    pub async fn replace(&self, old_id: &str, record: &DatabaseRecord) -> anyhow::Result<()> {
+        let conn = self.db.lock().await;
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM databases WHERE id = ?1", [old_id])?;
         tx.execute(
-            "INSERT INTO databases (id, namespace, jwt_public_key, jwt_private_key, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO databases (id, namespace, jwt_public_key, jwt_private_key, token, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 record.id,
                 record.namespace,
                 record.jwt_public_key,
                 record.jwt_private_key,
+                record.token,
                 record.created_at
             ],
         )?;
@@ -275,11 +299,55 @@ fn error_response(status: StatusCode, message: &str) -> axum::response::Response
     (status, Json(json!({ "error": message }))).into_response()
 }
 
+/// Router-wide middleware for the admin API: rejects requests without a
+/// valid admin key and requests sent while miniturso is not configured.
+/// The `/api/auth/verify` endpoint is exempted, since it is how the admin UI
+/// checks the key supplied in the request body.
+async fn admin_auth(
+    State(state): State<super::AppState>,
+    req: Request<Body>,
+    next: Next<Body>,
+) -> axum::response::Response {
+    if req.uri().path() == "/api/auth/verify" {
+        return next.run(req).await;
+    }
+    let Some(miniturso) = &state.miniturso else {
+        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
+    };
+    if let Err(status) = require_admin(req.headers(), &miniturso.config) {
+        return error_response(status, "Unauthorized");
+    }
+    next.run(req).await
+}
+
+/// The admin middleware guarantees miniturso is configured, so handlers can
+/// fetch the state without repeating the 503 check.
+fn miniturso(state: &super::AppState) -> &MinitursoState {
+    state
+        .miniturso
+        .as_ref()
+        .expect("admin middleware guarantees miniturso is configured")
+}
+
+/// Look up a database record by id, returning a 404 response when missing.
+async fn get_record_or_404(
+    miniturso: &MinitursoState,
+    id: &str,
+) -> Result<DatabaseRecord, axum::response::Response> {
+    miniturso
+        .metadata
+        .get(id)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Database not found"))
+}
+
 // ─── Database stats ───────────────────────────────────────────────────
 
-fn read_stats(sqld_data_dir: &Path, namespace: &str) -> Option<Value> {
+async fn read_stats(sqld_data_dir: &Path, namespace: &str) -> Option<Value> {
     let path = sqld_data_dir.join("dbs").join(namespace).join("stats.json");
-    let data = std::fs::read_to_string(path).ok()?;
+    let data = tokio::fs::read_to_string(path).await.ok()?;
     serde_json::from_str(&data).ok()
 }
 
@@ -293,8 +361,8 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn enrich_database(state: &MinitursoState, record: &DatabaseRecord) -> Value {
-    let stats = read_stats(&state.config.sqld_data_dir, &record.namespace);
+async fn enrich_database(state: &MinitursoState, record: &DatabaseRecord) -> Value {
+    let stats = read_stats(&state.config.sqld_data_dir, &record.namespace).await;
     let storage_bytes = stats
         .as_ref()
         .and_then(|s| s.get("storage_bytes_used"))
@@ -362,7 +430,7 @@ pub struct AdminQueryReq {
     sql: Option<String>,
 }
 
-pub async fn verify_key(
+async fn verify_key(
     AxumState(state): AxumState<super::AppState>,
     Json(body): Json<VerifyKeyReq>,
 ) -> Json<Value> {
@@ -375,39 +443,27 @@ pub async fn verify_key(
     Json(json!({ "valid": valid }))
 }
 
-pub async fn list_databases(
+async fn list_databases(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
-    };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
-    }
-    match miniturso.metadata.list() {
+    let miniturso = miniturso(&state);
+    match miniturso.metadata.list().await {
         Ok(records) => {
-            let databases: Vec<Value> = records
-                .iter()
-                .map(|record| enrich_database(miniturso, record))
-                .collect();
+            let mut databases = Vec::with_capacity(records.len());
+            for record in records.iter() {
+                databases.push(enrich_database(miniturso, record).await);
+            }
             (Json(json!({ "databases": databases }))).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
-pub async fn create_database(
+async fn create_database(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
     Json(body): Json<CreateDatabaseReq>,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
-    };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
-    }
+    let miniturso = miniturso(&state);
 
     let Some(id) = body.id else {
         return error_response(StatusCode::BAD_REQUEST, "id is required");
@@ -421,7 +477,7 @@ pub async fn create_database(
             "id must be 1-36 characters, only [0-9a-z]",
         );
     }
-    if miniturso.metadata.get(&id).ok().flatten().is_some() {
+    if miniturso.metadata.get(&id).await.ok().flatten().is_some() {
         return error_response(StatusCode::CONFLICT, "A database with this id already exists");
     }
 
@@ -440,10 +496,11 @@ pub async fn create_database(
         namespace: id.clone(),
         jwt_public_key: public_key_b64,
         jwt_private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        token: token.clone(),
         created_at: Utc::now().to_rfc3339(),
         last_accessed_at: None,
     };
-    if let Err(e) = miniturso.metadata.insert(&record) {
+    if let Err(e) = miniturso.metadata.insert(&record).await {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
 
@@ -462,36 +519,24 @@ pub async fn create_database(
         .into_response()
 }
 
-pub async fn get_database(
+async fn get_database(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
+    let miniturso = miniturso(&state);
+    let record = match get_record_or_404(miniturso, &id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
-    }
-    match miniturso.metadata.get(&id) {
-        Ok(Some(record)) => (Json(enrich_database(miniturso, &record))).into_response(),
-        Ok(None) => error_response(StatusCode::NOT_FOUND, "Database not found"),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
+    (Json(enrich_database(miniturso, &record).await)).into_response()
 }
 
-pub async fn rename_database(
+async fn rename_database(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
     AxumPath(old_id): AxumPath<String>,
     Json(body): Json<RenameDatabaseReq>,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
-    };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
-    }
+    let miniturso = miniturso(&state);
 
     let Some(new_id) = body.id else {
         return error_response(StatusCode::BAD_REQUEST, "id is required");
@@ -514,10 +559,11 @@ pub async fn rename_database(
         );
     }
 
-    let Some(old_record) = miniturso.metadata.get(&old_id).ok().flatten() else {
-        return error_response(StatusCode::NOT_FOUND, "Database not found");
+    let old_record = match get_record_or_404(miniturso, &old_id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
-    if miniturso.metadata.get(&new_id).ok().flatten().is_some() {
+    if miniturso.metadata.get(&new_id).await.ok().flatten().is_some() {
         return error_response(StatusCode::CONFLICT, "A database with this id already exists");
     }
 
@@ -546,7 +592,7 @@ pub async fn rename_database(
         .join("dbs")
         .join("default");
     if old_db_path.exists() {
-        let _ = std::fs::copy(&old_db_path, &new_db_path);
+        let _ = tokio::fs::copy(&old_db_path, &new_db_path).await;
     }
 
     if let Err(e) = delete_namespace(&state, &old_record.namespace).await {
@@ -562,10 +608,11 @@ pub async fn rename_database(
         namespace: new_id.clone(),
         jwt_public_key: public_key_b64,
         jwt_private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        token: token.clone(),
         created_at: old_record.created_at,
         last_accessed_at: None,
     };
-    if let Err(e) = miniturso.metadata.replace(&old_id, &record) {
+    if let Err(e) = miniturso.metadata.replace(&old_id, &record).await {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
 
@@ -581,20 +628,15 @@ pub async fn rename_database(
     .into_response()
 }
 
-pub async fn rotate_token(
+async fn rotate_token(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
-    };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
-    }
+    let miniturso = miniturso(&state);
 
-    let Some(record) = miniturso.metadata.get(&id).ok().flatten() else {
-        return error_response(StatusCode::NOT_FOUND, "Database not found");
+    let record = match get_record_or_404(miniturso, &id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
 
     let (signing_key, public_key_b64) = generate_keypair();
@@ -610,7 +652,8 @@ pub async fn rotate_token(
     let mut new_record = record.clone();
     new_record.jwt_public_key = public_key_b64;
     new_record.jwt_private_key = URL_SAFE_NO_PAD.encode(signing_key.to_bytes());
-    if let Err(e) = miniturso.metadata.replace(&id, &new_record) {
+    new_record.token = token.clone();
+    if let Err(e) = miniturso.metadata.replace(&id, &new_record).await {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
 
@@ -625,20 +668,82 @@ pub async fn rotate_token(
     .into_response()
 }
 
-pub async fn delete_database(
+/// Flush the namespace WAL into the main `.db` file and compact it
+/// (checkpoint with TRUNCATE + vacuum). After this the WAL is empty; on a
+/// clean server shutdown SQLite also removes the `-wal`/`-shm` files,
+/// leaving a single `data` file.
+async fn checkpoint_database(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
+    let miniturso = miniturso(&state);
+
+    let record = match get_record_or_404(miniturso, &id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
+
+    let namespace = match NamespaceName::from_string(record.namespace.clone()) {
+        Ok(namespace) => namespace,
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid namespace"),
+    };
+
+    if let Err(e) = state.namespaces.checkpoint(namespace.clone()).await {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to checkpoint namespace {}: {}", namespace, e),
+        );
     }
 
-    let Some(record) = miniturso.metadata.get(&id).ok().flatten() else {
-        return error_response(StatusCode::NOT_FOUND, "Database not found");
+    Json(json!({
+        "checkpointed": true,
+        "id": record.id,
+        "namespace": record.namespace,
+    }))
+    .into_response()
+}
+
+/// Return the current app access token (full rw/ro permissions) for a
+/// database. This is not a renew route: the stored token is returned
+/// verbatim, and only changes when the token is regenerated (create /
+/// rename / rotate).
+async fn get_database_token(
+    AxumState(state): AxumState<super::AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> axum::response::Response {
+    let miniturso = miniturso(&state);
+
+    let record = match get_record_or_404(miniturso, &id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
+    };
+    if record.token.is_empty() {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "no access token stored for this database",
+        );
+    }
+
+    let conn_url = miniturso.config.connection_url();
+    Json(json!({
+        "id": record.id,
+        "namespace": record.namespace,
+        "token": record.token,
+        "host": conn_url.trim_start_matches("http://").trim_start_matches("https://"),
+        "connection_url": conn_url,
+    }))
+    .into_response()
+}
+
+async fn delete_database(
+    AxumState(state): AxumState<super::AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> axum::response::Response {
+    let miniturso = miniturso(&state);
+
+    let record = match get_record_or_404(miniturso, &id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
 
     if let Err(e) = delete_namespace(&state, &record.namespace).await {
@@ -648,7 +753,7 @@ pub async fn delete_database(
         );
     }
 
-    if let Err(e) = miniturso.metadata.delete(&id) {
+    if let Err(e) = miniturso.metadata.delete(&id).await {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
 
@@ -660,20 +765,20 @@ pub async fn delete_database(
     .into_response()
 }
 
+/// Live process list of in-flight queries across all namespaces: which
+/// thread, namespace, statement and step each query is on, how long it has
+/// been running, and how much CPU its thread consumed. Mirrors MySQL's
+/// `SHOW PROCESSLIST` for debugging which namespaces and jobs burn CPU.
+async fn handle_queries() -> axum::response::Response {
+    Json(crate::query_registry::snapshot()).into_response()
+}
+
 /// Let an admin run SQL against any database. The namespace is taken from
 /// the request body; authentication is the admin key, not a database JWT.
-pub async fn admin_query(
+async fn admin_query(
     AxumState(state): AxumState<super::AppState>,
-    headers: HeaderMap,
     Json(body): Json<AdminQueryReq>,
 ) -> axum::response::Response {
-    let Some(miniturso) = &state.miniturso else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "miniturso not configured");
-    };
-    if let Err(status) = require_admin(&headers, &miniturso.config) {
-        return error_response(status, "Unauthorized");
-    }
-
     let namespace = match NamespaceName::from_string(body.namespace.clone()) {
         Ok(namespace) => namespace,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid namespace"),
@@ -731,6 +836,72 @@ pub async fn handle_info() -> axum::response::Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
+#[derive(Deserialize)]
+pub struct AdminPipelineQuery {
+    ns: Option<String>,
+}
+
+async fn handle_admin_pipeline_impl(
+    state: super::AppState,
+    query: AdminPipelineQuery,
+    req: Request<Body>,
+    encoding: hrana::Encoding,
+) -> axum::response::Response {
+    let Some(ns) = query.ns else {
+        return error_response(StatusCode::BAD_REQUEST, "missing 'ns' query parameter");
+    };
+    let namespace = match NamespaceName::from_string(ns) {
+        Ok(namespace) => namespace,
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid namespace"),
+    };
+
+    let auth = Authenticated::FullAccess;
+    let connection_maker = match state
+        .namespaces
+        .with_authenticated(namespace.clone(), auth.clone(), |ns| ns.db.connection_maker())
+        .await
+    {
+        Ok(maker) => maker,
+        Err(e) => return error_response(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    let ctx = RequestContext::new(auth, namespace, state.namespaces.meta_store().clone());
+    match state
+        .hrana_http_srv
+        .handle_request(
+            connection_maker,
+            ctx,
+            req,
+            hrana::http::Endpoint::Pipeline,
+            hrana::Version::Hrana3,
+            encoding,
+        )
+        .await
+    {
+        Ok(resp) => resp.into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Admin-authenticated Hrana v3 pipeline: the admin key can target any
+/// database, selected with `?ns=<database id>`. Supports batching and
+/// baton-based connection reuse, unlike `/api/query`.
+async fn handle_admin_pipeline(
+    AxumState(state): AxumState<super::AppState>,
+    Query(query): Query<AdminPipelineQuery>,
+    req: Request<Body>,
+) -> axum::response::Response {
+    handle_admin_pipeline_impl(state, query, req, hrana::Encoding::Json).await
+}
+
+/// Admin-authenticated Hrana v3 pipeline with protobuf encoding.
+async fn handle_admin_pipeline_protobuf(
+    AxumState(state): AxumState<super::AppState>,
+    Query(query): Query<AdminPipelineQuery>,
+    req: Request<Body>,
+) -> axum::response::Response {
+    handle_admin_pipeline_impl(state, query, req, hrana::Encoding::Protobuf).await
+}
+
 // ─── Admin router ─────────────────────────────────────────────────────
 
 /// Build the standalone admin router, served on the dedicated admin
@@ -748,9 +919,22 @@ pub fn admin_router(miniturso: Option<Arc<MinitursoState>>, state: super::AppSta
                 .patch(rename_database)
                 .delete(delete_database),
         )
-        .route("/api/databases/:id/token", post(rotate_token))
+        .route(
+            "/api/databases/:id/token",
+            get(get_database_token).post(rotate_token),
+        )
+        .route("/api/databases/:id/checkpoint", post(checkpoint_database))
         .route("/api/auth/verify", post(verify_key))
         .route("/api/query", post(admin_query))
+        .route("/api/queries", get(handle_queries))
+        .route("/admin/v3/pipeline", post(handle_admin_pipeline))
+        .route(
+            "/admin/v3-protobuf/pipeline",
+            post(handle_admin_pipeline_protobuf),
+        )
+        // Auth + miniturso-config check for every API route (not the admin
+        // UI fallback).
+        .route_layer(middleware::from_fn_with_state(state.clone(), admin_auth))
         .fallback_service(AdminStatic(miniturso))
         .with_state(state)
 }
