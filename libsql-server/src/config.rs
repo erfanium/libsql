@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use hyper::client::HttpConnector;
-use hyper_rustls::HttpsConnector;
 use libsql_sys::EncryptionConfig;
 use sha256::try_digest;
 use tokio::time::Duration;
@@ -77,13 +76,6 @@ impl<A> Default for UserApiConfig<A> {
             auth_strategy: Auth::new(Disabled::new()),
         }
     }
-}
-
-pub struct AdminApiConfig<A = AddrIncoming, C = HttpsConnector<HttpConnector>> {
-    pub acceptor: A,
-    pub connector: C,
-    pub disable_metrics: bool,
-    pub auth_key: Option<String>,
 }
 
 #[derive(Clone)]

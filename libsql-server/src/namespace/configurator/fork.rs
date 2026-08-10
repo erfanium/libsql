@@ -53,7 +53,7 @@ pub(super) async fn fork(
         None
     };
 
-    let logger = match &from_ns.db {
+    let logger = match &*from_ns.db {
         Database::Primary(db) => db.wal_wrapper.wrapper().logger(),
         Database::Schema(db) => db.wal_wrapper.as_ref().unwrap().wrapper().logger(),
         _ => {

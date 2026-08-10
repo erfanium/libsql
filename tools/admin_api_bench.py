@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark the libsql-server (miniturso) admin API query endpoint with
+"""Benchmark the libsql-server admin API query endpoint with
 realistic mixed traffic.
 
 Three concurrent actions, each paced at an independent rate:
@@ -333,6 +333,16 @@ def format_system(sample, interval):
         f"io_r={mbps(sample['io_r_b']):5.2f}MB/s io_w={mbps(sample['io_w_b']):5.2f}MB/s "
         f"(syscall r={mbps(sample['sys_r_b']):5.2f} w={mbps(sample['sys_w_b']):5.2f}MB/s)"
     )
+
+
+def join_threads(threads, timeout):
+    """Join all threads, bounding the total wait to `timeout` seconds."""
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        t.join(remaining)
 
 
 def format_action(name, cur, prev, interval):
@@ -724,10 +734,10 @@ def start_web_server(port, ctx):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Benchmark the miniturso admin API (namespace create / insert / count)."
+        description="Benchmark the admin API (namespace create / insert / count)."
     )
     ap.add_argument("--url", default="http://127.0.0.1:3001", help="admin API base URL")
-    ap.add_argument("--admin-key", default="miniturso-admin-key-change-me")
+    ap.add_argument("--admin-key", default="admin-key-change-me")
     ap.add_argument("--n", type=float, default=5.0, help="namespace creates per second")
     ap.add_argument("--i", type=float, default=100.0, help="todo inserts per second")
     ap.add_argument("--c", type=float, default=100.0, help="count(*) queries per second")
@@ -757,6 +767,12 @@ def main():
         "--no-browser",
         action="store_true",
         help="do not auto-open the dashboard in the default browser",
+    )
+    ap.add_argument(
+        "--duration",
+        type=float,
+        default=0.0,
+        help="stop automatically after this many seconds (0 = run until stopped)",
     )
     ap.add_argument(
         "--seed",
@@ -874,8 +890,15 @@ def main():
     threading.Thread(target=input_loop, daemon=True).start()
 
     prev = {a.name: a.stats.snapshot() for a in actions}
+    deadline = t_start + args.duration if args.duration > 0 else None
     while not stop.is_set():
-        stop.wait(args.interval)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            stop.wait(min(args.interval, remaining))
+        else:
+            stop.wait(args.interval)
         if stop.is_set():
             break
         now = time.monotonic()
@@ -892,8 +915,7 @@ def main():
     for a in actions:
         a.pacer.wake()
     for a in actions:
-        for t in a.threads:
-            t.join(timeout=2)
+        join_threads(a.threads, timeout=2)
     if web is not None:
         web.shutdown()
     elapsed = time.monotonic() - t_start

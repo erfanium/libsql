@@ -83,10 +83,10 @@ USER sqld
 # MiniTurso platform configuration
 ENV SQLD_NODE=standalone
 ENV SQLD_DB_PATH=/data/sqld
-ENV MINITURSO_DATA_DIR=/data/platform
+ENV ADMIN_DATA_DIR=/data/platform
 ENV SQLD_HTTP_LISTEN_ADDR=0.0.0.0:3000
-ENV MINITURSO_ADMIN_LISTEN_ADDR=0.0.0.0:3001
-ENV MINITURSO_PUBLIC_DIR=/admin-ui
+ENV ADMIN_LISTEN_ADDR=0.0.0.0:3001
+ENV ADMIN_PUBLIC_DIR=/admin-ui
 
 COPY docker-entrypoint.sh /usr/local/bin
 COPY docker-wrapper.sh /usr/local/bin

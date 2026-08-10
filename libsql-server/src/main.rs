@@ -19,7 +19,7 @@ use libsql_server::config::{
     BottomlessConfig, DbConfig, HeartbeatConfig, MetaStoreConfig, RpcClientConfig,
     RpcServerConfig, TlsConfig, UserApiConfig,
 };
-use libsql_server::http::user::miniturso::MinitursoConfig;
+use libsql_server::http::admin::api::AdminConfig;
 use libsql_server::net::AddrIncoming;
 use libsql_server::version::Version;
 use libsql_server::Server;
@@ -485,23 +485,23 @@ async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
     })
 }
 
-/// Build the MiniTurso platform configuration from the environment.
-fn make_miniturso_config(config: &Cli) -> anyhow::Result<MinitursoConfig> {
-    let admin_key = std::env::var("MINITURSO_ADMIN_KEY")
-        .unwrap_or_else(|_| "miniturso-admin-key-change-me".to_string());
-    let version = std::env::var("MINITURSO_VERSION").unwrap_or_else(|_| "dev".to_string());
-    let data_dir = std::env::var("MINITURSO_DATA_DIR")
-        .unwrap_or_else(|_| "./miniturso-data/platform".to_string());
-    let public_dir = std::env::var("MINITURSO_PUBLIC_DIR").ok();
-    let scheme = std::env::var("MINITURSO_SCHEME").unwrap_or_else(|_| "http".to_string());
-    let host = std::env::var("MINITURSO_HOST").unwrap_or_else(|_| "localhost".to_string());
-    let connection_url = std::env::var("MINITURSO_CONNECTION_URL").ok();
-    let admin_listen_addr: SocketAddr = std::env::var("MINITURSO_ADMIN_LISTEN_ADDR")
+/// Build the admin platform configuration from the environment.
+fn make_admin_config(config: &Cli) -> anyhow::Result<AdminConfig> {
+    let admin_key =
+        std::env::var("ADMIN_KEY").unwrap_or_else(|_| "admin-key-change-me".to_string());
+    let version = std::env::var("ADMIN_VERSION").unwrap_or_else(|_| "dev".to_string());
+    let data_dir =
+        std::env::var("ADMIN_DATA_DIR").unwrap_or_else(|_| "./admin-data/platform".to_string());
+    let public_dir = std::env::var("ADMIN_PUBLIC_DIR").ok();
+    let scheme = std::env::var("ADMIN_SCHEME").unwrap_or_else(|_| "http".to_string());
+    let host = std::env::var("ADMIN_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let connection_url = std::env::var("ADMIN_CONNECTION_URL").ok();
+    let admin_listen_addr: SocketAddr = std::env::var("ADMIN_LISTEN_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:3001".to_string())
         .parse()
-        .context("invalid MINITURSO_ADMIN_LISTEN_ADDR")?;
+        .context("invalid ADMIN_LISTEN_ADDR")?;
 
-    Ok(MinitursoConfig {
+    Ok(AdminConfig {
         admin_key,
         version,
         data_dir: PathBuf::from(data_dir),
@@ -721,7 +721,7 @@ async fn build_server(
         force_load_wals: config.force_load_wals,
         sync_conccurency: config.sync_conccurency,
         set_log_level: Some(Box::new(set_log_level)),
-        miniturso_config: Some(make_miniturso_config(config)?),
+        admin_config: Some(make_admin_config(config)?),
     })
 }
 

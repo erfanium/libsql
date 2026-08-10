@@ -5,7 +5,7 @@ use tokio::task::JoinSet;
 
 use crate::connection::config::DatabaseConfig;
 use crate::connection::connection_manager::InnerWalManager;
-use crate::database::{Database, SchemaDatabase};
+use crate::database::{Database, DatabaseWithCache, SchemaDatabase};
 use crate::namespace::broadcasters::BroadcasterHandle;
 use crate::namespace::meta_store::MetaStoreHandle;
 use crate::namespace::{
@@ -73,7 +73,7 @@ impl ConfigureNamespace for SchemaConfigurator {
             .await?;
 
             Ok(Namespace {
-                db: Database::Schema(SchemaDatabase::new(
+                db: DatabaseWithCache::new(Database::Schema(SchemaDatabase::new(
                     self.migration_scheduler.clone(),
                     name.clone(),
                     connection_maker,
@@ -84,7 +84,7 @@ impl ConfigureNamespace for SchemaConfigurator {
                         .logger()
                         .new_frame_notifier
                         .subscribe(),
-                )),
+                ))),
                 name: name.clone(),
                 tasks: join_set,
                 stats,

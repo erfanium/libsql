@@ -1,5 +1,5 @@
 {
-  "name": "miniturso-e2e",
+  "name": "admin-api-e2e",
   "private": true,
   "description": "End-to-end tests for MiniTurso (libsql-server with the platform API).",
   "scripts": {

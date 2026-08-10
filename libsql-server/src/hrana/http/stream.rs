@@ -102,10 +102,6 @@ impl ServerStreamState {
             expire_round_base: Instant::now(),
         }
     }
-
-    pub(crate) fn handles(&self) -> &HashMap<u64, Handle> {
-        &self.handles
-    }
 }
 
 /// Acquire a guard to a new or existing stream. If baton is `Some`, we try to look up the stream,

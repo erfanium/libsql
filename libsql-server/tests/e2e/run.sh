@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build sqld (MiniTurso mode), start it locally, and run the E2E suite.
+# Build sqld (admin API mode), start it locally, and run the E2E suite.
 # Requires a recent Node.js (node:test) and cargo.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."   # libsql workspace root
@@ -7,11 +7,11 @@ cd "$(dirname "$0")/../../.."   # libsql workspace root
 cargo build -p libsql-server
 
 export SQLD_DB_PATH="${SQLD_DB_PATH:-$(mktemp -d)/sqld}"
-export MINITURSO_DATA_DIR="${MINITURSO_DATA_DIR:-$(mktemp -d)/platform}"
+export ADMIN_DATA_DIR="${ADMIN_DATA_DIR:-$(mktemp -d)/platform}"
 export SQLD_HTTP_LISTEN_ADDR="${SQLD_HTTP_LISTEN_ADDR:-127.0.0.1:3010}"
-export MINITURSO_ADMIN_LISTEN_ADDR="${MINITURSO_ADMIN_LISTEN_ADDR:-127.0.0.1:3011}"
-export MINITURSO_ADMIN_KEY="${MINITURSO_ADMIN_KEY:-miniturso-admin-key-change-me}"
-export MINITURSO_VERSION="${MINITURSO_VERSION:-dev}"
+export ADMIN_LISTEN_ADDR="${ADMIN_LISTEN_ADDR:-127.0.0.1:3011}"
+export ADMIN_KEY="${ADMIN_KEY:-admin-key-change-me}"
+export ADMIN_VERSION="${ADMIN_VERSION:-dev}"
 
 ./target/debug/sqld --no-welcome &
 PID=$!
@@ -32,4 +32,4 @@ cd libsql-server/tests/e2e
 if [ ! -d node_modules ]; then
   npm ci --no-audit --no-fund
 fi
-node e2e.js "http://${SQLD_HTTP_LISTEN_ADDR}" --admin-url "http://${MINITURSO_ADMIN_LISTEN_ADDR}" --admin-key "$MINITURSO_ADMIN_KEY"
+node e2e.js "http://${SQLD_HTTP_LISTEN_ADDR}" --admin-url "http://${ADMIN_LISTEN_ADDR}" --admin-key "$ADMIN_KEY"

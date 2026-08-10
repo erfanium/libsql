@@ -1,19 +1,13 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use hdrhistogram::Histogram;
 use itertools::Itertools;
 use serde::Serialize;
 
-use axum::extract::{Path, State};
-use axum::Json;
 use uuid::Uuid;
 
-use crate::namespace::NamespaceName;
 use crate::replication::FrameNo;
 use crate::stats::{QueryStats, SlowestQuery, Stats, TopQuery};
-
-use super::AppState;
 
 #[derive(Serialize)]
 pub struct StatsResponse {
@@ -134,34 +128,4 @@ pub struct QueryAndStats {
     pub elapsed_ms: f64,
     #[serde(flatten)]
     pub stat: QueryStats,
-}
-
-pub(super) async fn handle_stats<C>(
-    State(app_state): State<Arc<AppState<C>>>,
-    Path(namespace): Path<String>,
-) -> crate::Result<Json<StatsResponse>> {
-    let stats = app_state
-        .namespaces
-        .stats(NamespaceName::from_string(namespace)?)
-        .await?;
-    let resp: StatsResponse = stats.as_ref().into();
-
-    Ok(Json(resp))
-}
-
-pub(super) async fn handle_delete_stats<C>(
-    State(app_state): State<Arc<AppState<C>>>,
-    Path((namespace, stats_type)): Path<(String, String)>,
-) -> crate::Result<()> {
-    let stats = app_state
-        .namespaces
-        .stats(NamespaceName::from_string(namespace)?)
-        .await?;
-    match stats_type.as_str() {
-        "top" => stats.reset_top_queries(),
-        "slowest" => stats.reset_slowest_queries(),
-        _ => return Err(crate::error::Error::Internal("Invalid stats type".into())),
-    }
-
-    Ok(())
 }

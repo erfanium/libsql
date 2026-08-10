@@ -15,7 +15,7 @@ use crate::connection::connection_manager::InnerWalManager;
 use crate::connection::legacy::MakeLegacyConnection;
 use crate::connection::write_proxy::MakeWriteProxyConn;
 use crate::connection::MakeConnection;
-use crate::database::{Database, ReplicaDatabase};
+use crate::database::{Database, DatabaseWithCache, ReplicaDatabase};
 use crate::namespace::broadcasters::BroadcasterHandle;
 use crate::namespace::configurator::helpers::{make_stats, run_storage_monitor};
 use crate::namespace::meta_store::MetaStoreHandle;
@@ -269,7 +269,7 @@ impl ConfigureNamespace for ReplicaConfigurator {
 
             Ok(Namespace {
                 tasks: join_set,
-                db: Database::Replica(ReplicaDatabase { connection_maker }),
+                db: DatabaseWithCache::new(Database::Replica(ReplicaDatabase { connection_maker })),
                 name: name.clone(),
                 stats,
                 db_config_store: meta_store_handle,

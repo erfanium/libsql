@@ -151,10 +151,10 @@ pub struct Server<C = HttpConnector, A = AddrIncoming, D = HttpsConnector<HttpCo
     pub force_load_wals: bool,
     pub sync_conccurency: usize,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
-    /// MiniTurso platform configuration. When set, the platform admin API
+    /// Admin platform configuration. When set, the platform admin API
     /// (`/api/databases`, ...), `/version` and static UI are served on the
     /// user HTTP port.
-    pub miniturso_config: Option<crate::http::user::miniturso::MinitursoConfig>,
+    pub admin_config: Option<crate::http::admin::api::AdminConfig>,
 }
 
 impl<C, A, D> Default for Server<C, A, D> {
@@ -183,7 +183,7 @@ impl<C, A, D> Default for Server<C, A, D> {
             force_load_wals: false,
             sync_conccurency: 8,
             set_log_level: None,
-            miniturso_config: None,
+            admin_config: None,
         }
     }
 }
@@ -199,7 +199,7 @@ struct Services<A, P, S> {
     db_config: DbConfig,
     user_auth_strategy: Auth,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
-    pub miniturso_config: Option<crate::http::user::miniturso::MinitursoConfig>,
+    pub admin_config: Option<crate::http::admin::api::AdminConfig>,
 }
 
 struct TaskManager {
@@ -293,7 +293,7 @@ where
             enable_console: self.user_api_config.enable_http_console,
             self_url: self.user_api_config.self_url,
             primary_url: self.user_api_config.primary_url,
-            miniturso_config: self.miniturso_config,
+            admin_config: self.admin_config,
         };
 
         user_http.configure(task_manager);
@@ -511,7 +511,7 @@ where
             db_config: self.db_config,
             user_auth_strategy,
             set_log_level: self.set_log_level.take(),
-            miniturso_config: self.miniturso_config,
+            admin_config: self.admin_config,
         }
     }
 

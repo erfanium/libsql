@@ -16,7 +16,7 @@ const ADMIN_URL = process.argv.includes("--admin-url")
   : BASE_URL;
 const ADMIN_KEY = process.argv.includes("--admin-key")
   ? process.argv[process.argv.indexOf("--admin-key") + 1]
-  : "miniturso-admin-key-change-me";
+  : "admin-key-change-me";
 
 let dbId;
 let token;
@@ -95,7 +95,7 @@ after(async () => {
   if (dbId) await fetchApi("DELETE", `/api/databases/${dbId}`);
 });
 
-describe("MiniTurso E2E", { concurrency: false }, () => {
+describe("Admin API E2E", { concurrency: false }, () => {
   it("creates and lists databases", async () => {
     const response = await fetchApi("GET", "/api/databases");
     assert.ok(response.databases.some(database => database.id === dbId));
@@ -237,7 +237,7 @@ describe("MiniTurso E2E", { concurrency: false }, () => {
   });
 
   it("syncs an embedded replica", async () => {
-    replicaFile = path.join(os.tmpdir(), `miniturso-replica-${dbId}.db`);
+    replicaFile = path.join(os.tmpdir(), `admin-api-replica-${dbId}.db`);
     const replica = createClient({
       url: `file:${replicaFile}`,
       syncUrl: BASE_URL,

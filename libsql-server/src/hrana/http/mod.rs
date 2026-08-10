@@ -70,10 +70,6 @@ impl Server {
         })
         .or_else(|err| err.downcast::<ProtocolError>().map(protocol_error_response))
     }
-
-    pub(crate) fn stream_state(&self) -> &Mutex<stream::ServerStreamState> {
-        &self.stream_state
-    }
 }
 
 pub(crate) async fn handle_index() -> hyper::Response<hyper::Body> {

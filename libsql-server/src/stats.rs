@@ -452,11 +452,6 @@ impl Stats {
         &self.top_queries
     }
 
-    pub(crate) fn reset_top_queries(&self) {
-        self.top_queries.write().unwrap().clear();
-        self.top_query_threshold.store(0, Ordering::Relaxed);
-    }
-
     fn add_slowest_query(&self, query: SlowestQuery) {
         let mut slowest_queries = self.slowest_queries.write().unwrap();
         tracing::debug!("slowest query: {}: {}", query.elapsed_ms, query.query);
@@ -476,11 +471,6 @@ impl Stats {
 
     pub(crate) fn slowest_queries(&self) -> &Arc<RwLock<BTreeSet<SlowestQuery>>> {
         &self.slowest_queries
-    }
-
-    pub(crate) fn reset_slowest_queries(&self) {
-        self.slowest_queries.write().unwrap().clear();
-        self.slowest_query_threshold.store(0, Ordering::Relaxed);
     }
 
     // TOOD: Update these metrics with namespace labels in the future so we can localize

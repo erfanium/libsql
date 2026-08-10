@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Delete every namespace/database on the miniturso admin API.
+"""Delete every namespace/database on the admin API.
 
 Lists all databases via GET /api/databases and deletes them one by one
 with DELETE /api/databases/:id. Prints progress and verifies the list is
@@ -22,7 +22,7 @@ import urllib.request
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--url", default="http://127.0.0.1:3001", help="admin API base URL")
-    ap.add_argument("--admin-key", default="miniturso-admin-key-change-me")
+    ap.add_argument("--admin-key", default="admin-key-change-me")
     ap.add_argument("--dry-run", action="store_true", help="list namespaces but delete nothing")
     ap.add_argument("--timeout", type=float, default=60.0, help="per-request timeout (s)")
     args = ap.parse_args()

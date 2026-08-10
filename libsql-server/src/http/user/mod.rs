@@ -3,10 +3,9 @@ mod dump;
 mod extract;
 mod hrana_over_http_1;
 mod listen;
-pub mod miniturso;
-mod result_builder;
+pub(crate) mod result_builder;
 mod trace;
-mod types;
+pub(crate) mod types;
 #[macro_use]
 pub mod timing;
 
@@ -54,9 +53,9 @@ use crate::utils::services::idle_shutdown::IdleShutdownKicker;
 use crate::{hrana, TaskManager};
 
 use self::db_factory::MakeConnectionExtractor;
-use self::miniturso::MinitursoState;
 use self::result_builder::JsonHttpPayloadBuilder;
 use self::types::QueryObject;
+use crate::http::admin::api::AdminState;
 
 impl TryFrom<query::Value> for serde_json::Value {
     type Error = Error;
@@ -202,7 +201,7 @@ async fn handle_upgrade(
 }
 
 async fn handle_version() -> Response<Body> {
-    let version = std::env::var("MINITURSO_VERSION").unwrap_or_else(|_| "dev".to_string());
+    let version = std::env::var("ADMIN_VERSION").unwrap_or_else(|_| "dev".to_string());
     let body = serde_json::json!({ "version": version }).to_string();
     Response::new(Body::from(body))
 }
@@ -236,15 +235,15 @@ async fn handle_hrana_pipeline(
 /// axum's `State` extractor.
 #[derive(Clone)]
 pub struct AppState {
-    user_auth_strategy: Auth,
-    namespaces: NamespaceStore,
-    upgrade_tx: mpsc::Sender<hrana::ws::Upgrade>,
-    hrana_http_srv: Arc<hrana::http::Server>,
-    enable_console: bool,
-    disable_default_namespace: bool,
-    disable_namespaces: bool,
-    primary_url: Option<String>,
-    miniturso: Option<Arc<MinitursoState>>,
+    pub(crate) user_auth_strategy: Auth,
+    pub(crate) namespaces: NamespaceStore,
+    pub(crate) upgrade_tx: mpsc::Sender<hrana::ws::Upgrade>,
+    pub(crate) hrana_http_srv: Arc<hrana::http::Server>,
+    pub(crate) enable_console: bool,
+    pub(crate) disable_default_namespace: bool,
+    pub(crate) disable_namespaces: bool,
+    pub(crate) primary_url: Option<String>,
+    pub(crate) admin: Option<Arc<AdminState>>,
 }
 
 pub struct UserApi<A, P, S> {
@@ -261,7 +260,7 @@ pub struct UserApi<A, P, S> {
     pub enable_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
-    pub miniturso_config: Option<miniturso::MinitursoConfig>,
+    pub admin_config: Option<crate::http::admin::api::AdminConfig>,
 }
 
 impl<A, P, S> UserApi<A, P, S>
@@ -317,11 +316,11 @@ where
         }
 
         if let Some(acceptor) = self.http_acceptor {
-            let miniturso = match self.miniturso_config {
-                Some(config) => match miniturso::Metadata::open(&config.data_dir) {
-                    Ok(metadata) => Some(Arc::new(MinitursoState { config, metadata })),
+            let admin = match self.admin_config {
+                Some(config) => match crate::http::admin::api::Metadata::open(&config.data_dir) {
+                    Ok(metadata) => Some(Arc::new(AdminState { config, metadata })),
                     Err(e) => {
-                        tracing::error!("failed to open miniturso metadata store: {}", e);
+                        tracing::error!("failed to open admin metadata store: {}", e);
                         None
                     }
                 },
@@ -337,14 +336,15 @@ where
                 disable_default_namespace: self.disable_default_namespace,
                 disable_namespaces: self.disable_namespaces,
                 primary_url: self.primary_url.clone(),
-                miniturso,
+                admin,
             };
 
             // Serve the admin router (dashboard + API) on its own listener.
-            if let Some(miniturso) = &state.miniturso {
-                let admin_addr = miniturso.config.admin_listen_addr;
+            if let Some(admin) = &state.admin {
+                crate::http::admin::init_metrics();
+                let admin_addr = admin.config.admin_listen_addr;
                 let admin_router =
-                    miniturso::admin_router(Some(miniturso.clone()), state.clone());
+                    crate::http::admin::api::admin_router(Some(admin.clone()), state.clone());
                 task_manager.spawn_until_shutdown(async move {
                     let listener = tokio::net::TcpListener::bind(admin_addr).await?;
                     let admin_acceptor = crate::net::AddrIncoming::new(listener);
@@ -387,7 +387,7 @@ where
                 .route("/version", get(handle_version))
                 .route("/console", get(show_console))
                 .route("/health", get(handle_health))
-                .route("/info", get(miniturso::handle_info))
+                .route("/info", get(crate::http::admin::api::handle_info))
                 .route("/dump", get(dump::handle_dump))
                 .route("/beta/listen", get(listen::handle_listen))
                 .route("/v1", get(hrana_over_http_1::handle_index))

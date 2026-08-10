@@ -17,7 +17,6 @@ use crate::database::DatabaseKind;
 use crate::error::Error;
 use crate::metrics::NAMESPACE_LOAD_LATENCY;
 use crate::namespace::{NamespaceBottomlessDbId, NamespaceBottomlessDbIdInit, NamespaceName};
-use crate::stats::Stats;
 
 use super::broadcasters::{BroadcasterHandle, BroadcasterRegistry};
 use super::configurator::{DynConfigurator, NamespaceConfigurators};
@@ -473,10 +472,6 @@ impl NamespaceStore {
         self.inner.store.invalidate_all();
         self.inner.store.run_pending_tasks().await;
         Ok(())
-    }
-
-    pub(crate) async fn stats(&self, namespace: NamespaceName) -> crate::Result<Arc<Stats>> {
-        self.with(namespace, |ns| ns.stats.clone()).await
     }
 
     pub(crate) fn broadcaster(&self, namespace: NamespaceName) -> BroadcasterHandle {

@@ -23,6 +23,18 @@ impl<C> SchemaConnection<C> {
     pub(crate) fn connection(&self) -> &C {
         &self.connection
     }
+
+    /// Release the connection throttle permit held by the inner connection,
+    /// if it is uniquely referenced. See
+    /// [`Connection::release_throttle_permit`].
+    pub(crate) fn release_throttle_permit(&mut self)
+    where
+        C: crate::connection::ReleaseThrottlePermit,
+    {
+        if let Some(conn) = Arc::get_mut(&mut self.connection) {
+            conn.release_throttle_permit();
+        }
+    }
 }
 
 #[async_trait::async_trait]
