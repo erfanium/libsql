@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::auth::parse_jwt_keys;
 use crate::connection::config::DatabaseConfig;
 use crate::connection::Connection as _;
-use crate::database::DatabaseWithCache;
+use crate::database::Database;
 use crate::stats::Stats;
 
 use self::meta_store::MetaStoreHandle;
@@ -58,7 +58,7 @@ pub enum NamespaceBottomlessDbIdInit {
 /// A namespace isolates the resources pertaining to a database of type T
 #[derive(Debug)]
 pub struct Namespace {
-    pub db: DatabaseWithCache,
+    pub db: Database,
     name: NamespaceName,
     /// The set of tasks associated with this namespace
     tasks: JoinSet<anyhow::Result<()>>,
@@ -74,7 +74,7 @@ impl Namespace {
 
     async fn destroy(mut self) -> anyhow::Result<()> {
         self.tasks.shutdown().await;
-        self.db.destroy().await;
+        self.db.destroy();
         Ok(())
     }
 

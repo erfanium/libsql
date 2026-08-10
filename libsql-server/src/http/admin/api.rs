@@ -815,36 +815,21 @@ async fn admin_query(
     };
 
     let auth = Authenticated::FullAccess;
-    let conn_cache = match state
+    let connection_maker = match state
         .namespaces
-        .with_authenticated(namespace.clone(), auth.clone(), |ns| ns.db.conn_cache())
+        .with_authenticated(namespace.clone(), auth.clone(), |ns| ns.db.connection_maker())
         .await
     {
-        Ok(cache) => cache,
+        Ok(maker) => maker,
         Err(e) => return error_response(StatusCode::NOT_FOUND, &e.to_string()),
     };
     let ctx = RequestContext::new(auth, namespace, state.namespaces.meta_store().clone());
-    // Wait for the cached connection to become available — never create a
-    // second connection while one is in use, so each namespace is served by
-    // exactly one connection. `None` means the cache was closed by namespace
-    // eviction/shutdown.
-    let db = match conn_cache.take().await {
-        Some(db) => db,
-        None => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "namespace is shutting down or was evicted",
-            )
-        }
+    let db = match connection_maker.create().await {
+        Ok(db) => db,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     let builder = JsonHttpPayloadBuilder::new();
-    let result = db
-        .execute_batch_or_rollback(batch, ctx, builder, None)
-        .await;
-    // Always return the connection, even on error, or the next request would
-    // wait on the cache forever.
-    conn_cache.put(db).await;
-    match result {
+    match db.execute_batch_or_rollback(batch, ctx, builder, None).await {
         Ok(builder) => (
             [(hyper::header::CONTENT_TYPE, "application/json")],
             builder.into_ret(),

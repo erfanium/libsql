@@ -25,7 +25,6 @@ use crate::Result;
 
 use self::program::{Cond, DescribeResponse, Program, Step};
 
-pub mod cache;
 pub mod config;
 mod connection_core;
 pub mod connection_manager;
@@ -393,7 +392,7 @@ impl<F: MakeConnection> MakeConnection for MakeThrottledConnection<F> {
         CONNECTION_CREATE_TIME.record(before_create.elapsed());
 
         Ok(TrackedConnection {
-            permit: Some(permit),
+            permit,
             inner,
             created_at: Instant::now(),
         })
@@ -403,25 +402,9 @@ impl<F: MakeConnection> MakeConnection for MakeThrottledConnection<F> {
 #[derive(Debug)]
 pub struct TrackedConnection<DB> {
     inner: DB,
-    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    #[allow(dead_code)] // just hold on to it
+    permit: tokio::sync::OwnedSemaphorePermit,
     created_at: Instant,
-}
-
-impl<DB> TrackedConnection<DB> {}
-
-/// Releases the connection throttle permit held by a connection, if any.
-/// Used when a connection is parked idle in a connection cache: the permit
-/// only needs to bound connection creation, not idle cached connections,
-/// otherwise a cache holding more connections than the semaphore size would
-/// starve every further connection creation.
-pub(crate) trait ReleaseThrottlePermit {
-    fn release_throttle_permit(&mut self);
-}
-
-impl<DB> ReleaseThrottlePermit for TrackedConnection<DB> {
-    fn release_throttle_permit(&mut self) {
-        self.permit = None;
-    }
 }
 
 impl<T> Drop for TrackedConnection<T> {

@@ -1,13 +1,11 @@
 use std::fmt;
-use std::ops::Deref;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use bottomless::replicator::Replicator;
 use tokio::sync::watch;
 
-use crate::connection::cache::ConnCache;
-use crate::connection::{MakeConnection, ReleaseThrottlePermit, RequestContext};
+use crate::connection::{MakeConnection, RequestContext};
 use crate::replication::{FrameNo, ReplicationLogger};
 
 pub use self::primary::{PrimaryConnection, PrimaryConnectionMaker, PrimaryDatabase};
@@ -68,17 +66,6 @@ impl Connection {
     #[must_use]
     pub fn is_primary(&self) -> bool {
         matches!(self, Self::Primary(..))
-    }
-
-    /// Release the connection throttle permit, if any. Called when a
-    /// connection is parked idle in a connection cache so the semaphore
-    /// only bounds creation, not idle cached connections.
-    pub(crate) fn release_throttle_permit(&mut self) {
-        match self {
-            Connection::Primary(conn) => conn.release_throttle_permit(),
-            Connection::Replica(conn) => conn.release_throttle_permit(),
-            Connection::Schema(conn) => conn.release_throttle_permit(),
-        }
     }
 }
 
@@ -251,52 +238,5 @@ impl Database {
             Database::Replica(_) => None,
             Database::Schema(db) => db.replicator(),
         }
-    }
-}
-
-/// A [`Database`] with an attached connection cache.
-///
-/// The cache holds exactly one connection per database, reused by the admin
-/// query API across requests: the first request creates it, later requests
-/// wait for it to be released instead of opening a new one. The cache is
-/// closed when the database is destroyed or shut down, so a cached
-/// connection can never outlive the database generation (WAL/replication
-/// log) it belongs to.
-#[derive(Debug)]
-pub struct DatabaseWithCache {
-    inner: Database,
-    conn_cache: Arc<ConnCache>,
-}
-
-impl DatabaseWithCache {
-    pub fn new(database: Database) -> Self {
-        let conn_cache = ConnCache::new(database.connection_maker());
-        Self {
-            inner: database,
-            conn_cache,
-        }
-    }
-
-    /// Connection cache for this database (admin API connection reuse).
-    pub(crate) fn conn_cache(&self) -> Arc<ConnCache> {
-        self.conn_cache.clone()
-    }
-
-    pub async fn destroy(self) {
-        self.conn_cache.close().await;
-        self.inner.destroy();
-    }
-
-    pub async fn shutdown(self) -> Result<()> {
-        self.conn_cache.close().await;
-        self.inner.shutdown().await
-    }
-}
-
-impl Deref for DatabaseWithCache {
-    type Target = Database;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }

@@ -10,7 +10,7 @@ use tokio::task::JoinSet;
 use crate::connection::config::DatabaseConfig;
 use crate::connection::connection_manager::InnerWalManager;
 use crate::connection::{Connection as _, MakeConnection};
-use crate::database::{Database, DatabaseWithCache, PrimaryDatabase};
+use crate::database::{Database, PrimaryDatabase};
 use crate::namespace::broadcasters::BroadcasterHandle;
 use crate::namespace::configurator::helpers::make_primary_connection_maker;
 use crate::namespace::meta_store::MetaStoreHandle;
@@ -103,11 +103,11 @@ impl PrimaryConfigurator {
 
         Ok(Namespace {
             tasks: join_set,
-            db: DatabaseWithCache::new(Database::Primary(PrimaryDatabase {
+            db: Database::Primary(PrimaryDatabase {
                 wal_wrapper,
                 connection_maker,
                 block_writes,
-            })),
+            }),
             name: namespace,
             stats,
             db_config_store: meta_store_handle,
