@@ -18,8 +18,6 @@ miniturso-data/
 data.sqld/
 /dev.sh
 .codegraph/
-libsql-server/tests/e2e/node_modules/
-libsql-server/tests/e2e/local.db
 
 # staged admin UI build for the container image
 /admin-ui/
