@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use hashbrown::HashSet;
 use once_cell::sync::Lazy;
 
 use crate::namespace::NamespaceName;
 
-use super::{AuthError, Authenticated, Permission};
+use super::Permission;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, Default)]
 pub struct Authorized {
@@ -47,47 +45,6 @@ impl Authorized {
         match self.ddl_override {
             Some(ref scope) => scope.contains(name),
             None => false,
-        }
-    }
-
-    pub fn merge_legacy(
-        mut self,
-        namespace: Option<NamespaceName>,
-        perm: Option<Permission>,
-    ) -> Result<Authenticated, AuthError> {
-        match (namespace, perm) {
-            (Some(ns), Some(perm)) => {
-                let scope = match perm {
-                    Permission::Read => self.read_only.get_or_insert_with(Default::default),
-                    Permission::Write => self.read_write.get_or_insert_with(Default::default),
-                    Permission::AttachRead => {
-                        self.read_only_attach.get_or_insert_with(Default::default)
-                    }
-                };
-                scope
-                    .namespaces
-                    .get_or_insert_with(Default::default)
-                    .insert(ns);
-                Ok(Authenticated::Authorized(Arc::new(self)))
-            }
-            // legacy shit: interpret that as full access to ns
-            (Some(ns), None) => {
-                self.read_write
-                    .get_or_insert_with(Default::default)
-                    .namespaces
-                    .get_or_insert_with(Default::default)
-                    .insert(ns);
-                Ok(Authenticated::Authorized(Arc::new(self)))
-            }
-            (None, None) => {
-                // if there are no other claims, no claims is interpreted as full access.
-                if self.is_empty() {
-                    Ok(Authenticated::FullAccess)
-                } else {
-                    Ok(Authenticated::Authorized(Arc::new(self)))
-                }
-            }
-            _ => Err(AuthError::JwtInvalid),
         }
     }
 

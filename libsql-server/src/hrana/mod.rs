@@ -5,12 +5,10 @@ mod cursor;
 pub mod http;
 mod result_builder;
 pub mod stmt;
-pub mod ws;
 pub use libsql_hrana::proto;
 
 #[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Version {
-    Hrana1,
     Hrana2,
     Hrana3,
 }
@@ -91,7 +89,6 @@ pub enum ProtocolError {
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Version::Hrana1 => write!(f, "hrana1"),
             Version::Hrana2 => write!(f, "hrana2"),
             Version::Hrana3 => write!(f, "hrana3"),
         }

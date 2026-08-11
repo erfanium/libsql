@@ -37,6 +37,11 @@ impl Server {
         }
     }
 
+    /// Access to the server stream state (used by the diagnostics endpoint).
+    pub fn stream_state(&self) -> &Mutex<stream::ServerStreamState> {
+        &self.stream_state
+    }
+
     pub async fn run_expire(&self) {
         stream::run_expire(self).await
     }

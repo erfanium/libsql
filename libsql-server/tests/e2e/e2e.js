@@ -2,13 +2,13 @@
 
 const assert = require("node:assert/strict");
 const { after, before, describe, it } = require("node:test");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const { createClient } = require("@libsql/client");
-const { createClient: createWsClient } = require("@libsql/client/ws");
 
 const BASE_URL = process.argv.find(argument => argument.startsWith("http")) || "http://localhost:3000";
 const ADMIN_URL = process.argv.includes("--admin-url")
@@ -17,6 +17,30 @@ const ADMIN_URL = process.argv.includes("--admin-url")
 const ADMIN_KEY = process.argv.includes("--admin-key")
   ? process.argv[process.argv.indexOf("--admin-key") + 1]
   : "admin-key-change-me";
+const JWT_SECRET = process.argv.includes("--jwt-secret")
+  ? process.argv[process.argv.indexOf("--jwt-secret") + 1]
+  : process.env.SQLD_AUTH_JWT_SECRET || "";
+
+if (!JWT_SECRET) {
+  throw new Error("SQLD_AUTH_JWT_SECRET not configured; cannot mint test access tokens");
+}
+
+/** Mint a backend-style HS256 access token (same claims as the platform backend). */
+function mintAccessToken(userID, ttlSeconds = 3600) {
+  const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64url");
+  const header = enc({ alg: "HS256", typ: "JWT" });
+  const payload = enc({
+    jti: crypto.randomBytes(8).toString("hex"),
+    role: "user",
+    userID,
+    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+  });
+  const sig = crypto
+    .createHmac("sha256", JWT_SECRET)
+    .update(`${header}.${payload}`)
+    .digest("base64url");
+  return `${header}.${payload}.${sig}`;
+}
 
 let dbId;
 let token;
@@ -87,7 +111,7 @@ before(async () => {
     id: `e2e${Date.now().toString(36)}`,
   });
   dbId = database.id;
-  token = database.token;
+  token = mintAccessToken(dbId);
 });
 
 after(async () => {
@@ -101,40 +125,6 @@ describe("Admin API E2E", { concurrency: false }, () => {
     assert.ok(response.databases.some(database => database.id === dbId));
   });
 
-  it("returns the same access token until it is regenerated", async () => {
-    const first = await fetchApi("GET", `/api/databases/${dbId}/token`);
-    assert.equal(first.token, token);
-
-    const again = await fetchApi("GET", `/api/databases/${dbId}/token`);
-    assert.equal(again.token, first.token);
-  });
-
-  it("returns the regenerated token after rotation", async () => {
-    const database = await fetchApi("POST", "/api/databases", {
-      id: `e2etoken${Date.now().toString(36)}`,
-    });
-
-    try {
-      const before = await fetchApi("GET", `/api/databases/${database.id}/token`);
-      assert.equal(before.token, database.token);
-
-      const rotated = await fetchApi("POST", `/api/databases/${database.id}/token`);
-      assert.notEqual(rotated.token, database.token);
-
-      const afterRotate = await fetchApi("GET", `/api/databases/${database.id}/token`);
-      assert.equal(afterRotate.token, rotated.token);
-    } finally {
-      await fetchApi("DELETE", `/api/databases/${database.id}`);
-    }
-  });
-
-  it("returns 404 when fetching the token of an unknown database", async () => {
-    const response = await fetch(`${ADMIN_URL}/api/databases/does-not-exist/token`, {
-      headers: { "Authorization": `Bearer ${ADMIN_KEY}` },
-    });
-    assert.equal(response.status, 404);
-  });
-
   it("reports the deployed image version", async () => {
     const response = await fetch(`${BASE_URL}/version`);
     assert.equal(response.ok, true);
@@ -143,12 +133,83 @@ describe("Admin API E2E", { concurrency: false }, () => {
     assert.ok(body.version.length > 0);
   });
 
-  it("executes SQL through the HTTP pipeline", async () => {
-    await sqlQuery(token, "CREATE TABLE e2e_test (id INTEGER PRIMARY KEY, msg TEXT)");
-    await sqlQuery(token, [
-      "INSERT INTO e2e_test VALUES (1, 'hello http')",
-      "INSERT INTO e2e_test VALUES (2, 'from pipeline')",
-    ]);
+  it("reads its own namespace with a backend access token", async () => {
+    const response = await sqlQuery(token, "SELECT 1 AS one");
+    assert.deepEqual(response[0].results.rows, [[1]]);
+  });
+
+  it("rejects writes on the public port (read-only by design)", async () => {
+    const response = await fetch(`${BASE_URL}/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({ statements: ["CREATE TABLE nope (id INTEGER)"] }),
+    });
+    assert.equal(response.status, 403);
+  });
+
+  it("rejects writes through Hrana on the public port", async () => {
+    const client = createClient({ url: BASE_URL, authToken: token });
+    await assert.rejects(
+      () => client.execute("CREATE TABLE nope_hrana (id INTEGER)"),
+      /403|not allowed|writes are not allowed/,
+    );
+  });
+
+  it("rejects an invalid access token", async () => {
+    const response = await fetch(`${BASE_URL}/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer not-a-real-token",
+      },
+      body: JSON.stringify({ statements: ["SELECT 1"] }),
+    });
+    // 400: namespace resolution fails before auth (no claims in the token)
+    assert.ok([400, 401].includes(response.status), `status ${response.status}`);
+  });
+
+  it("rejects a token for another namespace", async () => {
+    const otherToken = mintAccessToken("someone-else");
+    const response = await fetch(`${BASE_URL}/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${otherToken}`,
+      },
+      body: JSON.stringify({ statements: ["SELECT 1"] }),
+    });
+    // 404: the claimed namespace does not exist on this server
+    assert.ok([403, 404].includes(response.status), `status ${response.status}`);
+  });
+
+  it("executes SQL without an application/json request header", async () => {
+    const response = await rawHttpRequest(token, JSON.stringify({
+      statements: ["SELECT 42 AS answer"],
+    }));
+
+    assert.deepEqual(response[0].results.rows, [[42]]);
+  });
+
+  it("seeds a table through the admin pipeline, then reads it on the public port", async () => {
+    const seed = await fetch(`${ADMIN_URL}/v3/pipeline`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${ADMIN_KEY}`,
+        "x-namespace": dbId,
+      },
+      body: JSON.stringify({
+        requests: [
+          { type: "execute", stmt: { sql: "CREATE TABLE IF NOT EXISTS e2e_test (id INTEGER PRIMARY KEY, msg TEXT)" } },
+          { type: "execute", stmt: { sql: "INSERT INTO e2e_test VALUES (1, 'hello http')" } },
+          { type: "execute", stmt: { sql: "INSERT INTO e2e_test VALUES (2, 'from pipeline')" } },
+        ],
+      }),
+    });
+    assert.equal(seed.ok, true, `admin seed status ${seed.status}`);
 
     const response = await sqlQuery(token, "SELECT * FROM e2e_test ORDER BY id");
     assert.deepEqual(response[0].results.rows, [
@@ -157,86 +218,64 @@ describe("Admin API E2E", { concurrency: false }, () => {
     ]);
   });
 
-  it("executes SQL without an application/json request header", async () => {
-    const response = await rawHttpRequest(token, JSON.stringify({
-      statements: ["SELECT id, msg FROM e2e_test WHERE id = 1"],
-    }));
-
-    assert.deepEqual(response[0].results.rows, [[1, "hello http"]]);
-  });
-
   it("executes SQL through Hrana", async () => {
     const client = createClient({ url: BASE_URL, authToken: token });
-    await client.execute("INSERT INTO e2e_test VALUES (3, 'hello hrana')");
-
     const response = await client.execute("SELECT msg FROM e2e_test ORDER BY id");
     assert.deepEqual(response.rows.map(row => row.msg), [
       "hello http",
       "from pipeline",
-      "hello hrana",
     ]);
-
-    const batch = await client.batch([
-      "INSERT INTO e2e_test VALUES (4, 'batch1')",
-      "INSERT INTO e2e_test VALUES (5, 'batch2')",
-      "SELECT count(*) AS cnt FROM e2e_test",
-    ]);
-    assert.ok(batch[2].rows[0].cnt >= 5);
   });
 
-  it("executes SQL through the admin Hrana pipeline against any namespace", async () => {
-    const response = await fetch(`${ADMIN_URL}/admin/v3/pipeline?ns=${dbId}`, {
+  it("executes SQL through the admin-port Hrana v2 pipeline (the @libsql/client wire path)", async () => {
+    const response = await fetch(`${ADMIN_URL}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${ADMIN_KEY}`,
+        "x-namespace": dbId,
       },
       body: JSON.stringify({
         requests: [
-          { type: "execute", stmt: { sql: "CREATE TABLE IF NOT EXISTS admin_pipeline (id INTEGER PRIMARY KEY, v TEXT)" } },
-          { type: "execute", stmt: { sql: "INSERT INTO admin_pipeline (v) VALUES ('via admin pipeline')" } },
+          { type: "execute", stmt: { sql: "INSERT INTO e2e_test (id, msg) VALUES (3, 'via v2 pipeline')" } },
         ],
       }),
     });
-    assert.equal(response.ok, true, `admin pipeline status ${response.status}`);
+    assert.equal(response.ok, true, `admin v2 pipeline status ${response.status}`);
     const body = await response.json();
     assert.ok(Array.isArray(body.results));
-    assert.equal(body.results.length, 2);
+    assert.equal(body.results.length, 1);
 
-    const check = await sqlQuery(token, "SELECT v FROM admin_pipeline");
-    assert.deepEqual(check[0].results.rows, [["via admin pipeline"]]);
+    const check = await sqlQuery(token, "SELECT msg FROM e2e_test WHERE id = 3");
+    assert.deepEqual(check[0].results.rows, [["via v2 pipeline"]]);
   });
 
-  it("rejects admin Hrana pipeline with a bad admin key", async () => {
-    const response = await fetch(`${ADMIN_URL}/admin/v3/pipeline?ns=${dbId}`, {
+  it("rejects the admin pipeline with a bad admin key", async () => {
+    const response = await fetch(`${ADMIN_URL}/v3/pipeline`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer wrong-admin-key",
+        "x-namespace": dbId,
       },
       body: JSON.stringify({ requests: [] }),
     });
     assert.equal(response.status, 401);
   });
 
-  it.skip("executes SQL through Hrana over WebSocket (MiniTurso does not expose WebSocket)", async () => {
-    const client = createWsClient({
-      url: BASE_URL.replace(/^http/, "ws"),
-      authToken: token,
+  it("rejects the admin pipeline without an x-namespace header", async () => {
+    const response = await fetch(`${ADMIN_URL}/v3/pipeline`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${ADMIN_KEY}`,
+      },
+      body: JSON.stringify({ requests: [] }),
     });
-
-    try {
-      assert.equal(client.protocol, "ws");
-      await client.execute("INSERT INTO e2e_test VALUES (7, 'hello websocket')");
-
-      const response = await client.execute("SELECT msg FROM e2e_test WHERE id = 7");
-      assert.deepEqual(response.rows.map(row => row.msg), ["hello websocket"]);
-    } finally {
-      client.close();
-    }
+    assert.equal(response.status, 400);
   });
 
-  it("syncs an embedded replica", async () => {
+  it("syncs an embedded replica (reads)", async () => {
     replicaFile = path.join(os.tmpdir(), `admin-api-replica-${dbId}.db`);
     const replica = createClient({
       url: `file:${replicaFile}`,
@@ -246,21 +285,6 @@ describe("Admin API E2E", { concurrency: false }, () => {
 
     await replica.sync();
     const response = await replica.execute("SELECT count(*) AS cnt FROM e2e_test");
-    assert.ok(response.rows[0].cnt >= 5);
-  });
-
-  it("syncs writes from the embedded replica back to primary", async () => {
-    const replica = createClient({
-      url: `file:${replicaFile}`,
-      syncUrl: BASE_URL,
-      authToken: token,
-    });
-
-    await replica.execute("INSERT INTO e2e_test VALUES (6, 'from replica')");
-    await replica.sync();
-
-    const client = createClient({ url: BASE_URL, authToken: token });
-    const response = await client.execute("SELECT count(*) AS cnt FROM e2e_test");
-    assert.ok(response.rows[0].cnt >= 6);
+    assert.ok(response.rows[0].cnt >= 3);
   });
 });

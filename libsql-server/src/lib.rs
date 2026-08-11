@@ -24,7 +24,6 @@ use crate::rpc::run_rpc_server;
 use crate::schema::Scheduler;
 use crate::stats::Stats;
 use anyhow::Context as AnyhowContext;
-use auth::Auth;
 use config::{
     DbConfig, HeartbeatConfig, RpcClientConfig, RpcServerConfig, UserApiConfig,
 };
@@ -96,7 +95,7 @@ mod utils;
 
 const DB_CREATE_TIMEOUT: Duration = Duration::from_secs(1);
 const DEFAULT_AUTO_CHECKPOINT: u32 = 1000;
-const LIBSQL_PAGE_SIZE: u64 = 4096;
+pub const LIBSQL_PAGE_SIZE: u64 = 4096;
 
 pub(crate) static BLOCKING_RT: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -111,7 +110,6 @@ type StatsSender = mpsc::Sender<(NamespaceName, MetaStoreHandle, Weak<Stats>)>;
 type MakeReplicationSvc = Box<
     dyn Fn(
             NamespaceStore,
-            Option<Auth>,
             Option<IdleShutdownKicker>,
             bool,
             bool,
@@ -151,10 +149,11 @@ pub struct Server<C = HttpConnector, A = AddrIncoming, D = HttpsConnector<HttpCo
     pub force_load_wals: bool,
     pub sync_conccurency: usize,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
-    /// Admin platform configuration. When set, the platform admin API
-    /// (`/api/databases`, ...), `/version` and static UI are served on the
-    /// user HTTP port.
-    pub admin_config: Option<crate::http::admin::api::AdminConfig>,
+    /// Admin API key protecting the namespace management routes
+    /// (`/v1/namespaces/*`). When unset, the admin routes are disabled.
+    /// Defaults to `admin-key-change-me` when configured from `ADMIN_KEY`
+    /// (see `main.rs`).
+    pub admin_api_key: Option<String>,
 }
 
 impl<C, A, D> Default for Server<C, A, D> {
@@ -183,7 +182,7 @@ impl<C, A, D> Default for Server<C, A, D> {
             force_load_wals: false,
             sync_conccurency: 8,
             set_log_level: None,
-            admin_config: None,
+            admin_api_key: None,
         }
     }
 }
@@ -197,9 +196,8 @@ struct Services<A, P, S> {
     disable_namespaces: bool,
     disable_default_namespace: bool,
     db_config: DbConfig,
-    user_auth_strategy: Auth,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
-    pub admin_config: Option<crate::http::admin::api::AdminConfig>,
+    pub admin_api_key: Option<String>,
 }
 
 struct TaskManager {
@@ -278,11 +276,9 @@ where
     P: Proxy,
     S: ReplicationLog,
 {
-    fn configure(mut self, task_manager: &mut TaskManager) {
+    fn configure(self, task_manager: &mut TaskManager) {
         let user_http = UserApi {
             http_acceptor: self.user_api_config.http_acceptor,
-            hrana_ws_acceptor: self.user_api_config.hrana_ws_acceptor,
-            user_auth_strategy: self.user_auth_strategy,
             namespaces: self.namespace_store.clone(),
             idle_shutdown_kicker: self.idle_shutdown_kicker.clone(),
             proxy_service: self.proxy_service,
@@ -293,7 +289,7 @@ where
             enable_console: self.user_api_config.enable_http_console,
             self_url: self.user_api_config.self_url,
             primary_url: self.user_api_config.primary_url,
-            admin_config: self.admin_config,
+            admin_api_key: self.admin_api_key,
         };
 
         user_http.configure(task_manager);
@@ -498,7 +494,6 @@ where
         idle_shutdown_kicker: Option<IdleShutdownKicker>,
         proxy_service: P,
         replication_service: L,
-        user_auth_strategy: Auth,
     ) -> Services<A, P, L> {
         Services {
             namespace_store,
@@ -509,9 +504,8 @@ where
             disable_namespaces: self.disable_namespaces,
             disable_default_namespace: self.disable_default_namespace,
             db_config: self.db_config,
-            user_auth_strategy,
             set_log_level: self.set_log_level.take(),
-            admin_config: self.admin_config,
+            admin_api_key: self.admin_api_key,
         }
     }
 
@@ -551,7 +545,6 @@ where
         let idle_shutdown_kicker = self.setup_shutdown();
 
         let extensions = self.db_config.validate_extensions()?;
-        let user_auth_strategy = self.user_api_config.auth_strategy.clone();
 
         let scripted_backup = match self.db_config.snapshot_exec {
             Some(ref command) => {
@@ -634,7 +627,7 @@ where
         // configure rpc server
         if let Some(config) = self.rpc_server_config.take() {
             let proxy_service =
-                ProxyService::new(namespace_store.clone(), None, self.disable_namespaces);
+                ProxyService::new(namespace_store.clone(), self.disable_namespaces);
             // Garbage collect proxy clients every 30 seconds
             task_manager.spawn_until_shutdown({
                 let clients = proxy_service.clients();
@@ -648,7 +641,6 @@ where
 
             let replication_service = make_replication_svc(
                 namespace_store.clone(),
-                Some(user_auth_strategy.clone()),
                 idle_shutdown_kicker.clone(),
                 false,
                 true,
@@ -689,17 +681,13 @@ where
 
                 let replication_svc = make_replication_svc(
                     namespace_store.clone(),
-                    Some(user_auth_strategy.clone()),
                     idle_shutdown_kicker.clone(),
                     true,
                     false, // external replication service
                 );
 
-                let proxy_svc = ProxyService::new(
-                    namespace_store.clone(),
-                    Some(user_auth_strategy.clone()),
-                    self.disable_namespaces,
-                );
+                let proxy_svc =
+                    ProxyService::new(namespace_store.clone(), self.disable_namespaces);
 
                 // Garbage collect proxy clients every 30 seconds
                 task_manager.spawn_until_shutdown({
@@ -717,7 +705,6 @@ where
                     idle_shutdown_kicker,
                     proxy_svc,
                     replication_svc,
-                    user_auth_strategy.clone(),
                 )
                 .configure(&mut task_manager);
             }
@@ -728,18 +715,11 @@ where
                     channel,
                     uri,
                     namespace_store.clone(),
-                    user_auth_strategy.clone(),
                     self.disable_namespaces,
                 );
 
-                self.make_services(
-                    namespace_store.clone(),
-                    idle_shutdown_kicker,
-                    proxy_svc,
-                    replication_svc,
-                    user_auth_strategy,
-                )
-                .configure(&mut task_manager);
+                self.make_services(namespace_store.clone(), idle_shutdown_kicker, proxy_svc, replication_svc)
+                    .configure(&mut task_manager);
             }
         };
 
@@ -814,16 +794,10 @@ where
 
         let make_replication_svc = Box::new({
             let disable_namespaces = self.disable_namespaces;
-            move |store,
-                  client_auth,
-                  idle_shutdown,
-                  collect_stats,
-                  is_internal|
-                  -> BoxReplicationService {
+            move |store, idle_shutdown, collect_stats, is_internal| -> BoxReplicationService {
                 Box::new(ReplicationLogService::new(
                     store,
                     idle_shutdown,
-                    client_auth,
                     disable_namespaces,
                     collect_stats,
                     is_internal,

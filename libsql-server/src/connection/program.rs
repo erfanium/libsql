@@ -359,6 +359,24 @@ pub async fn check_program_auth(
     config: &DatabaseConfig,
 ) -> crate::Result<()> {
     for step in pgm.steps() {
+        // The public port is strictly read-only: reject any statement that
+        // could modify state, regardless of what the token claims.
+        if ctx.is_read_only() {
+            match &step.query.stmt.kind {
+                StmtKind::Write | StmtKind::DDL => {
+                    return Err(Error::Forbidden(
+                        "writes are not allowed on the public port".to_string(),
+                    ))
+                }
+                StmtKind::Attach(_) => {
+                    return Err(Error::Forbidden(
+                        "attach is not allowed on the public port".to_string(),
+                    ))
+                }
+                _ => {}
+            }
+        }
+
         match &step.query.stmt.kind {
             StmtKind::TxnBegin
             | StmtKind::TxnEnd

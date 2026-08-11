@@ -1,18 +1,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Context as _;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures_core::{Future, Stream};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::auth::parse_jwt_keys;
 use crate::connection::config::DatabaseConfig;
 use crate::connection::Connection as _;
 use crate::database::Database;
+use crate::replication::ReplicationInfo;
 use crate::stats::Stats;
+use crate::BLOCKING_RT;
 
 use self::meta_store::MetaStoreHandle;
 pub use self::name::NamespaceName;
@@ -85,6 +85,42 @@ impl Namespace {
         Ok(())
     }
 
+    async fn compact(&self) -> anyhow::Result<bool> {
+        let Some(logger) = self.db.logger() else {
+            anyhow::bail!("namespace is not a primary, cannot compact");
+        };
+        BLOCKING_RT
+            .spawn_blocking(move || logger.force_compact())
+            .await?
+    }
+
+    fn replication_info(&self) -> ReplicationInfo {
+        let mut info = match self.db.logger() {
+            Some(logger) => {
+                let mut info = logger.replication_info();
+                if let Database::Schema(_) = &self.db {
+                    info.kind = "schema";
+                }
+                info
+            }
+            None => {
+                let mut info = ReplicationInfo::replica();
+                let ri = self.stats.get_current_frame_no();
+                if ri > 0 {
+                    info.replication_index = Some(ri);
+                }
+                info
+            }
+        };
+        if info.replication_index.is_none() {
+            let ri = self.stats.get_current_frame_no();
+            if ri > 0 {
+                info.replication_index = Some(ri);
+            }
+        }
+        info
+    }
+
     async fn shutdown(mut self, should_checkpoint: bool) -> anyhow::Result<()> {
         self.tasks.shutdown().await;
         if should_checkpoint {
@@ -105,16 +141,6 @@ impl Namespace {
         self.db_config_store.version()
     }
 
-    pub fn jwt_keys(&self) -> crate::Result<Option<Vec<jsonwebtoken::DecodingKey>>> {
-        let config = self.db_config_store.get();
-        if let Some(jwt_key) = config.jwt_key.as_deref() {
-            Ok(Some(
-                parse_jwt_keys(jwt_key).context("Could not parse JWT decoding key(s)")?,
-            ))
-        } else {
-            Ok(None)
-        }
-    }
 
     pub fn stats(&self) -> Arc<Stats> {
         self.stats.clone()

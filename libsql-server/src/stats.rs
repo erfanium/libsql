@@ -473,6 +473,14 @@ impl Stats {
         &self.slowest_queries
     }
 
+    pub fn reset_top_queries(&self) {
+        self.top_queries.write().unwrap().clear();
+    }
+
+    pub fn reset_slowest_queries(&self) {
+        self.slowest_queries.write().unwrap().clear();
+    }
+
     // TOOD: Update these metrics with namespace labels in the future so we can localize
     // issues to a specific namespace.
     fn update_query_metrics(&self, rows_read: u64, rows_written: u64, mem_used: u64, elapsed: u64) {

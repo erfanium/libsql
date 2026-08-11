@@ -1,7 +1,6 @@
 pub mod db_factory;
 mod dump;
 mod extract;
-mod hrana_over_http_1;
 mod listen;
 pub(crate) mod result_builder;
 mod trace;
@@ -12,7 +11,7 @@ pub mod timing;
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::extract::{FromRef, FromRequest, FromRequestParts, Path as AxumPath, State as AxumState};
+use axum::extract::{FromRequest, FromRequestParts, Path as AxumPath, State as AxumState};
 use axum::http::request::Parts;
 use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
@@ -28,14 +27,13 @@ use libsql_replication::rpc::replication::replication_log_server::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Number;
-use tokio::sync::{mpsc, oneshot};
 use tonic::transport::Server;
 
 use tower_http::compression::predicate::NotForContentType;
 use tower_http::compression::{DefaultPredicate, Predicate};
 use tower_http::{compression::CompressionLayer, cors};
 
-use crate::auth::{Auth, AuthError, Authenticated, Jwt, Permission, UserAuthContext};
+use crate::auth::{Authenticated, Permission};
 use crate::connection::{Connection, RequestContext};
 use crate::error::Error;
 use crate::http::user::db_factory::MakeConnectionExtractorPath;
@@ -55,7 +53,6 @@ use crate::{hrana, TaskManager};
 use self::db_factory::MakeConnectionExtractor;
 use self::result_builder::JsonHttpPayloadBuilder;
 use self::types::QueryObject;
-use crate::http::admin::api::AdminState;
 
 impl TryFrom<query::Value> for serde_json::Value {
     type Error = Error;
@@ -172,34 +169,6 @@ async fn handle_fallback() -> impl IntoResponse {
     (StatusCode::NOT_FOUND).into_response()
 }
 
-async fn handle_upgrade(
-    AxumState(AppState { upgrade_tx, .. }): AxumState<AppState>,
-    req: Request<Body>,
-) -> Response<Body> {
-    if !hyper_tungstenite::is_upgrade_request(&req) {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::empty())
-            .unwrap();
-    }
-
-    let (response_tx, response_rx) = oneshot::channel();
-    let _: Result<_, _> = upgrade_tx
-        .send(hrana::ws::Upgrade {
-            request: req,
-            response_tx,
-        })
-        .await;
-
-    match response_rx.await {
-        Ok(response) => response,
-        Err(_) => Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .body(Body::from("sqld was not able to process the HTTP upgrade"))
-            .unwrap(),
-    }
-}
-
 async fn handle_version() -> Response<Body> {
     let version = std::env::var("ADMIN_VERSION").unwrap_or_else(|_| "dev".to_string());
     let body = serde_json::json!({ "version": version }).to_string();
@@ -235,21 +204,19 @@ async fn handle_hrana_pipeline(
 /// axum's `State` extractor.
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) user_auth_strategy: Auth,
     pub(crate) namespaces: NamespaceStore,
-    pub(crate) upgrade_tx: mpsc::Sender<hrana::ws::Upgrade>,
     pub(crate) hrana_http_srv: Arc<hrana::http::Server>,
     pub(crate) enable_console: bool,
     pub(crate) disable_default_namespace: bool,
     pub(crate) disable_namespaces: bool,
     pub(crate) primary_url: Option<String>,
-    pub(crate) admin: Option<Arc<AdminState>>,
+    /// Admin API key protecting the namespace management routes
+    /// (`/v1/namespaces/*`).
+    pub(crate) admin_api_key: Option<String>,
 }
 
 pub struct UserApi<A, P, S> {
-    pub user_auth_strategy: Auth,
     pub http_acceptor: Option<A>,
-    pub hrana_ws_acceptor: Option<A>,
     pub namespaces: NamespaceStore,
     pub idle_shutdown_kicker: Option<IdleShutdownKicker>,
     pub proxy_service: P,
@@ -260,7 +227,7 @@ pub struct UserApi<A, P, S> {
     pub enable_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
-    pub admin_config: Option<crate::http::admin::api::AdminConfig>,
+    pub admin_api_key: Option<String>,
 }
 
 impl<A, P, S> UserApi<A, P, S>
@@ -270,35 +237,7 @@ where
     S: ReplicationLog,
 {
     pub fn configure(self, task_manager: &mut TaskManager) -> Arc<hrana::http::Server> {
-        let (hrana_accept_tx, hrana_accept_rx) = mpsc::channel(8);
-        let (hrana_upgrade_tx, hrana_upgrade_rx) = mpsc::channel(8);
         let hrana_http_srv = Arc::new(hrana::http::Server::new(self.self_url.clone()));
-
-        task_manager.spawn_until_shutdown({
-            let namespaces = self.namespaces.clone();
-            let user_auth_strategy = self.user_auth_strategy.clone();
-            let idle_kicker = self
-                .idle_shutdown_kicker
-                .clone()
-                .map(|isl| isl.into_kicker());
-            let disable_default_namespace = self.disable_default_namespace;
-            let disable_namespaces = self.disable_namespaces;
-            let max_response_size = self.max_response_size;
-            async move {
-                hrana::ws::serve(
-                    user_auth_strategy,
-                    idle_kicker,
-                    max_response_size,
-                    hrana_accept_rx,
-                    hrana_upgrade_rx,
-                    namespaces,
-                    disable_default_namespace,
-                    disable_namespaces,
-                )
-                .await
-                .context("Hrana server failed")
-            }
-        });
 
         task_manager.spawn_until_shutdown({
             let server = hrana_http_srv.clone();
@@ -308,54 +247,18 @@ where
             }
         });
 
-        if let Some(acceptor) = self.hrana_ws_acceptor {
-            task_manager.spawn_until_shutdown(async move {
-                hrana::ws::listen(acceptor, hrana_accept_tx).await;
-                Ok(())
-            });
-        }
-
         if let Some(acceptor) = self.http_acceptor {
-            let admin = match self.admin_config {
-                Some(config) => match crate::http::admin::api::Metadata::open(&config.data_dir) {
-                    Ok(metadata) => Some(Arc::new(AdminState { config, metadata })),
-                    Err(e) => {
-                        tracing::error!("failed to open admin metadata store: {}", e);
-                        None
-                    }
-                },
-                None => None,
-            };
+            crate::http::admin::init_metrics();
 
             let state = AppState {
-                user_auth_strategy: self.user_auth_strategy,
-                upgrade_tx: hrana_upgrade_tx,
                 hrana_http_srv: hrana_http_srv.clone(),
                 enable_console: self.enable_console,
                 namespaces: self.namespaces,
                 disable_default_namespace: self.disable_default_namespace,
                 disable_namespaces: self.disable_namespaces,
                 primary_url: self.primary_url.clone(),
-                admin,
+                admin_api_key: self.admin_api_key,
             };
-
-            // Serve the admin router (dashboard + API) on its own listener.
-            if let Some(admin) = &state.admin {
-                crate::http::admin::init_metrics();
-                let admin_addr = admin.config.admin_listen_addr;
-                let admin_router =
-                    crate::http::admin::api::admin_router(Some(admin.clone()), state.clone());
-                task_manager.spawn_until_shutdown(async move {
-                    let listener = tokio::net::TcpListener::bind(admin_addr).await?;
-                    let admin_acceptor = crate::net::AddrIncoming::new(listener);
-                    tracing::info!("listening for admin HTTP connection on {}", admin_addr);
-                    hyper::server::Server::builder(admin_acceptor)
-                        .serve(admin_router.into_make_service())
-                        .await
-                        .context("admin http server")?;
-                    Ok(())
-                });
-            }
 
             macro_rules! handle_hrana {
                 ($endpoint:expr, $version:expr, $encoding:expr,) => {{
@@ -383,16 +286,11 @@ where
 
             let app = Router::new()
                 .route("/", post(handle_query))
-                .route("/", get(handle_upgrade))
                 .route("/version", get(handle_version))
                 .route("/console", get(show_console))
                 .route("/health", get(handle_health))
-                .route("/info", get(crate::http::admin::api::handle_info))
                 .route("/dump", get(dump::handle_dump))
                 .route("/beta/listen", get(listen::handle_listen))
-                .route("/v1", get(hrana_over_http_1::handle_index))
-                .route("/v1/execute", post(hrana_over_http_1::handle_execute))
-                .route("/v1/batch", post(hrana_over_http_1::handle_batch))
                 .route("/v2", get(crate::hrana::http::handle_index))
                 .route(
                     "/v2/pipeline",
@@ -444,6 +342,9 @@ where
                 .route("/v1/jobs", get(handle_get_migrations))
                 .route("/v1/jobs/:job_id", get(handle_get_migration_details))
                 .layer(middleware::from_fn(timings_middleware))
+                .merge(crate::http::admin::api::platform_routes())
+                .merge(crate::http::admin::admin_routes(state.admin_api_key.clone()))
+                .merge(crate::http::admin::openapi::docs_routes())
                 .with_state(state);
 
             // Merge the grpc based axum router into our regular http router
@@ -503,52 +404,8 @@ impl FromRequestParts<AppState> for Authenticated {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let ns = db_factory::namespace_from_headers(
-            &parts.headers,
-            state.disable_default_namespace,
-            state.disable_namespaces,
-        )?;
-        // todo dupe #auth
-        let namespace_jwt_keys = state
-            .namespaces
-            .with(ns.clone(), |ns| ns.jwt_keys())
-            .await??;
-
-        let auth = namespace_jwt_keys
-            .map(Jwt::new)
-            .map(Auth::new)
-            .unwrap_or_else(|| state.user_auth_strategy.clone());
-
-        let context = build_context(&parts.headers, &auth.user_strategy.required_fields());
-
-        Ok(auth.authenticate(context)?)
-    }
-}
-
-fn build_context(
-    headers: &hyper::HeaderMap<HeaderValue>,
-    required_fields: &Vec<&'static str>,
-) -> UserAuthContext {
-    let mut ctx = headers
-        .get(hyper::header::AUTHORIZATION)
-        .ok_or(AuthError::AuthHeaderNotFound)
-        .and_then(|h| h.to_str().map_err(|_| AuthError::AuthHeaderNonAscii))
-        .and_then(|t| UserAuthContext::from_auth_str(t))
-        .unwrap_or(UserAuthContext::empty());
-
-    for field in required_fields.iter() {
-        headers
-            .get(field.to_string())
-            .map(|h| h.to_str().ok())
-            .and_then(|t| t.map(|s| ctx.add_field(field, s.into())));
-    }
-
-    ctx
-}
-
-impl FromRef<AppState> for Auth {
-    fn from_ref(input: &AppState) -> Self {
-        input.user_auth_strategy.clone()
+        let (auth, _) = db_factory::authenticate_request(parts, state).await?;
+        Ok(auth)
     }
 }
 

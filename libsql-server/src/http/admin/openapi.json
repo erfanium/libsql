@@ -1,0 +1,493 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "sqld HTTP API",
+    "version": "dev",
+    "description": "sqld private HTTP surface. The sqld ports are private in the cluster and only reachable through the backend, which authenticates requests and routes them to the right namespace via the `x-namespace` header.\n\nThe namespace management routes (`/v1/namespaces/*`) are protected by the admin API key (`Authorization: Bearer <ADMIN_KEY>`). The Hrana pipeline (`/v2/pipeline`, `/v3/pipeline`, `/v3-protobuf/*`) and the gRPC-web replication surface (`/wal_log.ReplicationLog/*`, `proxy.Proxy/*`) are wire protocols documented elsewhere and are intentionally not part of this REST spec."
+  },
+  "servers": [{ "url": "/" }],
+  "security": [],
+  "paths": {
+    "/v1/namespaces/{namespace}/create": {
+      "post": {
+        "summary": "Create a namespace",
+        "description": "Creates an empty namespace. Returns 400 with `Namespace ... already exists` when it already exists.",
+        "operationId": "createNamespace",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[0-9a-z-]+$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateNamespaceReq" } } }
+        },
+        "responses": {
+          "200": { "description": "Namespace created" },
+          "400": {
+            "description": "Invalid request (namespace already exists, shared schema misuse)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}/config": {
+      "get": {
+        "summary": "Get namespace config",
+        "operationId": "getNamespaceConfig",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Namespace config",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HttpDatabaseConfig" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      },
+      "post": {
+        "summary": "Update namespace config",
+        "operationId": "updateNamespaceConfig",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HttpDatabaseConfig" } } }
+        },
+        "responses": {
+          "200": { "description": "Config updated" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}/checkpoint": {
+      "post": {
+        "summary": "Checkpoint a namespace",
+        "description": "Checkpoints the namespace WAL into the main database file.",
+        "operationId": "checkpointNamespace",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Checkpointed" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}/compact": {
+      "post": {
+        "summary": "Compact a namespace",
+        "description": "Forces compaction of the replication log, advancing the log start and creating a snapshot file for faster replica sync.",
+        "operationId": "compactNamespace",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Compacted" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}/replication": {
+      "get": {
+        "summary": "Replication info",
+        "description": "Returns replication state: generation, wallog position, compaction thresholds. Replica namespaces return only `is_primary: false`.",
+        "operationId": "replicationInfo",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Replication info" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{from}/fork/{to}": {
+      "post": {
+        "summary": "Fork a namespace",
+        "operationId": "forkNamespace",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "to",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ForkNamespaceReq" } } }
+        },
+        "responses": {
+          "200": { "description": "Forked" },
+          "400": {
+            "description": "Invalid request",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}": {
+      "delete": {
+        "summary": "Delete a namespace",
+        "operationId": "deleteNamespace",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeleteNamespaceReq" } } }
+        },
+        "responses": {
+          "200": { "description": "Namespace deleted" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}/stats": {
+      "get": {
+        "summary": "Get namespace stats",
+        "operationId": "getNamespaceStats",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Namespace stats",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatsResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/namespaces/{namespace}/stats/{stats_type}": {
+      "delete": {
+        "summary": "Reset namespace stats",
+        "description": "Resets a stats bucket. `stats_type` is `top` or `slowest`.",
+        "operationId": "resetNamespaceStats",
+        "security": [{ "AdminKey": [] }],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "stats_type",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "enum": ["top", "slowest"] }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Stats reset" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NamespaceNotFound" },
+          "500": {
+            "description": "Invalid stats type",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/v1/diagnostics": {
+      "get": {
+        "summary": "Hrana stream diagnostics",
+        "operationId": "diagnostics",
+        "security": [{ "AdminKey": [] }],
+        "responses": {
+          "200": {
+            "description": "Per-stream diagnostic strings",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "string" } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Prometheus metrics",
+        "operationId": "metrics",
+        "security": [{ "AdminKey": [] }],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition",
+            "content": { "text/plain": { "schema": { "type": "string" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/AdminNotConfigured" }
+        }
+      }
+    },
+    "/api/queries": {
+      "get": {
+        "summary": "In-flight queries (processlist)",
+        "description": "Live view of all in-flight queries across namespaces: thread, namespace, statement, step, elapsed time and CPU usage.",
+        "operationId": "queries",
+        "responses": {
+          "200": {
+            "description": "In-flight queries",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ApiQuery" } } } }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Liveness probe",
+        "operationId": "health",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "This OpenAPI document",
+        "operationId": "openapi",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.0 spec",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "summary": "Swagger UI",
+        "description": "Browser UI for this API (assets loaded from a CDN).",
+        "operationId": "docs",
+        "responses": {
+          "200": {
+            "description": "Swagger UI HTML",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Server version",
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "description": "Version",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VersionResponse" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AdminKey": { "type": "http", "scheme": "bearer" }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid admin key",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "AdminNotConfigured": {
+        "description": "The admin key is not configured (ADMIN_KEY unset); the route is disabled",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "NamespaceNotFound": {
+        "description": "Namespace does not exist",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "string" } }
+      },
+      "CreateNamespaceReq": {
+        "type": "object",
+        "properties": {
+          "max_db_size": { "type": "string", "description": "e.g. \"10 MB\"" },
+          "heartbeat_url": { "type": "string", "format": "uri" },
+          "bottomless_db_id": { "type": "string" },
+          "jwt_key": { "type": "string" },
+          "txn_timeout_s": { "type": "integer", "format": "int64" },
+          "max_row_size": { "type": "integer", "format": "int64" },
+          "shared_schema": { "type": "boolean", "default": false },
+          "shared_schema_name": { "type": "string" },
+          "allow_attach": { "type": "boolean", "default": false },
+          "durability_mode": { "$ref": "#/components/schemas/DurabilityMode" }
+        }
+      },
+      "HttpDatabaseConfig": {
+        "type": "object",
+        "required": ["block_reads", "block_writes", "allow_attach"],
+        "properties": {
+          "block_reads": { "type": "boolean" },
+          "block_writes": { "type": "boolean" },
+          "block_reason": { "type": "string", "nullable": true },
+          "max_db_size": { "type": "string", "nullable": true },
+          "heartbeat_url": { "type": "string", "nullable": true },
+          "jwt_key": { "type": "string", "nullable": true },
+          "allow_attach": { "type": "boolean" },
+          "txn_timeout_s": { "type": "integer", "format": "int64", "nullable": true },
+          "durability_mode": { "$ref": "#/components/schemas/DurabilityMode" }
+        }
+      },
+      "ForkNamespaceReq": {
+        "type": "object",
+        "required": ["timestamp"],
+        "properties": {
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "DeleteNamespaceReq": {
+        "type": "object",
+        "properties": {
+          "keep_backup": { "type": "boolean", "default": false }
+        }
+      },
+      "DurabilityMode": {
+        "type": "string",
+        "enum": ["extra", "strong", "relaxed", "off"]
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid", "nullable": true },
+          "rows_read_count": { "type": "integer", "format": "int64" },
+          "rows_written_count": { "type": "integer", "format": "int64" },
+          "storage_bytes_used": { "type": "integer", "format": "int64" },
+          "write_requests_delegated": { "type": "integer", "format": "int64" },
+          "replication_index": { "type": "integer", "format": "int64" },
+          "top_queries": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/QueryStat" }
+          },
+          "slowest_queries": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/QueryStat" }
+          },
+          "embedded_replica_frames_replicated": { "type": "integer", "format": "int64" },
+          "query_count": { "type": "integer", "format": "int64" },
+          "elapsed_ms": { "type": "number", "format": "double" },
+          "queries": {
+            "type": "object",
+            "nullable": true,
+            "description": "Query-level latency stats, when captured",
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "created_at": { "type": "integer", "format": "int64" },
+              "count": { "type": "integer", "format": "int64" },
+              "stats": { "type": "array", "items": { "type": "object" } },
+              "elapsed": { "type": "object", "additionalProperties": { "type": "number" } }
+            }
+          }
+        }
+      },
+      "QueryStat": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "elapsed_ms": { "type": "number", "format": "double" }
+        }
+      },
+      "ApiQuery": {
+        "type": "object",
+        "description": "An in-flight query, as reported by /api/queries",
+        "properties": {
+          "conn_id": { "type": "integer", "format": "int64" },
+          "kind": { "type": "string", "enum": ["query", "sync"] },
+          "thread_id": { "type": "string" },
+          "tid": { "type": "integer", "format": "int32" },
+          "namespace": { "type": "string" },
+          "state": { "type": "string", "enum": ["running", "blocked"] },
+          "current_step": { "type": "integer", "format": "int64" },
+          "total_steps": { "type": "integer", "format": "int64" },
+          "current_sql": { "type": "string" },
+          "elapsed_ms": { "type": "integer", "format": "int64" },
+          "last_heartbeat_ms_ago": { "type": "integer", "format": "int64" },
+          "cpu_seconds": { "type": "number", "format": "double" }
+        }
+      },
+      "VersionResponse": {
+        "type": "object",
+        "required": ["version"],
+        "properties": { "version": { "type": "string" } }
+      }
+    }
+  }
+}

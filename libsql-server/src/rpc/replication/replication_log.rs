@@ -20,7 +20,6 @@ use tonic::transport::server::TcpConnectInfo;
 use tonic::Status;
 use uuid::Uuid;
 
-use crate::auth::Auth;
 use crate::connection::config::DatabaseConfig;
 use crate::namespace::{NamespaceName, NamespaceStore};
 use crate::replication::primary::frame_stream::FrameStream;
@@ -33,7 +32,6 @@ use crate::rpc::extract_namespace;
 pub struct ReplicationLogService {
     namespaces: NamespaceStore,
     idle_shutdown_layer: Option<IdleShutdownKicker>,
-    user_auth_strategy: Option<Auth>,
     disable_namespaces: bool,
     session_token: Bytes,
     collect_stats: bool,
@@ -52,7 +50,6 @@ impl ReplicationLogService {
     pub fn new(
         namespaces: NamespaceStore,
         idle_shutdown_layer: Option<IdleShutdownKicker>,
-        user_auth_strategy: Option<Auth>,
         disable_namespaces: bool,
         collect_stats: bool,
         service_internal: bool,
@@ -62,7 +59,6 @@ impl ReplicationLogService {
             namespaces,
             session_token,
             idle_shutdown_layer,
-            user_auth_strategy,
             disable_namespaces,
             collect_stats,
             generation_id: Uuid::new_v4(),
@@ -79,14 +75,7 @@ impl ReplicationLogService {
         if self.service_internal && req.metadata().get("libsql-proxied").is_some()
             || !self.service_internal
         {
-            super::auth::authenticate(
-                &self.namespaces,
-                req,
-                namespace,
-                &self.user_auth_strategy,
-                true,
-            )
-            .await
+            super::auth::authenticate::<T>(&self.namespaces, namespace, true).await
         } else {
             Ok(())
         }

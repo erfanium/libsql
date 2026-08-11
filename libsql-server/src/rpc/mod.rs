@@ -122,22 +122,17 @@ fn extract_namespace<T>(
         return Ok(NamespaceName::default());
     }
 
-    if let Some(auth) = req.metadata().get("x-authorization") {
-        if let Ok(auth_str) = auth.to_str() {
-            let mut split = auth_str.split_whitespace();
-            if let (Some(scheme), Some(token)) = (split.next(), split.next()) {
-                if scheme.eq_ignore_ascii_case("bearer") {
-                    if let Some(ns) =
-                        crate::auth::user_auth_strategies::jwt::extract_namespace_from_token(token)
-                    {
-                        return Ok(ns);
-                    }
-                }
+    if let Some(ns) = req.metadata().get("x-namespace") {
+        if let Ok(ns_str) = ns.to_str() {
+            if let Ok(namespace) = NamespaceName::from_string(ns_str.to_string()) {
+                return Ok(namespace);
             }
         }
     }
 
-    Err(Status::invalid_argument("Missing namespace in authorization token"))
+    Err(Status::invalid_argument(
+        "Missing or invalid x-namespace metadata",
+    ))
 }
 
 fn trace_request<B>(req: &hyper::Request<B>, span: &Span) {

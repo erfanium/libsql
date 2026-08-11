@@ -12,6 +12,25 @@ use crate::namespace::NamespaceName;
 
 use super::AppState;
 
+/// Resolve the request's authentication and namespace.
+///
+/// Namespace routing happens through the `x-namespace` header; requests are
+/// executed with full access. The sqld ports are private in the cluster and
+/// only reachable through the backend, which is responsible for
+/// authentication.
+pub(crate) async fn authenticate_request(
+    parts: &mut Parts,
+    state: &AppState,
+) -> crate::Result<(Authenticated, NamespaceName)> {
+    let namespace = namespace_from_headers(
+        &parts.headers,
+        state.disable_default_namespace,
+        state.disable_namespaces,
+    )?;
+
+    Ok((Authenticated::FullAccess, namespace))
+}
+
 pub struct MakeConnectionExtractor(pub Arc<dyn MakeConnection<Connection = Connection>>);
 
 #[async_trait::async_trait]
@@ -46,28 +65,18 @@ pub fn namespace_from_headers(
         return Ok(NamespaceName::default());
     }
 
-    if let Some(auth) = headers
-        .get(hyper::header::AUTHORIZATION)
-        .or_else(|| headers.get("x-authorization"))
+    if let Some(ns) = headers
+        .get("x-namespace")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|ns| NamespaceName::from_string(ns.to_string()).ok())
     {
-        if let Ok(auth_str) = auth.to_str() {
-            let mut split = auth_str.split_whitespace();
-            if let (Some(scheme), Some(token)) = (split.next(), split.next()) {
-                if scheme.eq_ignore_ascii_case("bearer") {
-                    if let Some(ns) =
-                        crate::auth::user_auth_strategies::jwt::extract_namespace_from_token(token)
-                    {
-                        return Ok(ns);
-                    }
-                }
-            }
-        }
+        return Ok(ns);
     }
 
     if !disable_default_namespace {
         Ok(NamespaceName::default())
     } else {
-        Err(Error::InvalidHost("missing host header".into()))
+        Err(Error::InvalidHost("missing x-namespace header".into()))
     }
 }
 

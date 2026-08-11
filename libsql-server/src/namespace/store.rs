@@ -17,6 +17,7 @@ use crate::database::DatabaseKind;
 use crate::error::Error;
 use crate::metrics::NAMESPACE_LOAD_LATENCY;
 use crate::namespace::{NamespaceBottomlessDbId, NamespaceBottomlessDbIdInit, NamespaceName};
+use crate::replication::ReplicationInfo;
 
 use super::broadcasters::{BroadcasterHandle, BroadcasterRegistry};
 use super::configurator::{DynConfigurator, NamespaceConfigurators};
@@ -150,6 +151,23 @@ impl NamespaceStore {
             ns.checkpoint().await?;
         }
         Ok(())
+    }
+
+    pub async fn compact(&self, namespace: NamespaceName) -> crate::Result<bool> {
+        let entry = self
+            .inner
+            .store
+            .get_with(namespace.clone(), async { Default::default() })
+            .await;
+        let lock = entry.read().await;
+        if let Some(ns) = &*lock {
+            return Ok(ns.compact().await?);
+        }
+        Ok(false)
+    }
+
+    pub async fn replication_info(&self, namespace: NamespaceName) -> crate::Result<ReplicationInfo> {
+        self.with(namespace, |ns| ns.replication_info()).await
     }
 
     pub async fn reset(

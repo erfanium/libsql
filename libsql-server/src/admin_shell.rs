@@ -3,10 +3,9 @@ use std::str::FromStr;
 
 use dialoguer::BasicHistory;
 use tokio_stream::StreamExt as _;
-use tonic::metadata::{AsciiMetadataValue, BinaryMetadataValue};
+use tonic::metadata::AsciiMetadataValue;
 
 use crate::namespace::NamespaceName;
-
 mod rpc {
     #![allow(clippy::all)]
     include!("generated/admin_shell.rs");
@@ -32,9 +31,9 @@ impl AdminShellClient {
         let req_stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
 
         let mut req = tonic::Request::new(req_stream);
-        req.metadata_mut().insert_bin(
-            "x-namespace-bin",
-            BinaryMetadataValue::from_bytes(namespace.as_slice()),
+        req.metadata_mut().insert(
+            "x-namespace",
+            AsciiMetadataValue::from_str(namespace.as_str()).unwrap(),
         );
 
         if let Some(ref auth) = self.auth {
