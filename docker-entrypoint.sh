@@ -23,7 +23,7 @@ if [ "$1" = '/bin/sqld' ]; then
       server_args+=("--grpc-listen-addr" "$SQLD_GRPC_LISTEN_ADDR")
       ;;
     replica)
-      server_args+=("--primary-grpc-url" "$SQLD_PRIMARY_URL")
+      server_args+=("--primary-grpc-url" "$SQLD_PRIMARY_GRPC_URL")
       ;;
     standalone)
       ;;

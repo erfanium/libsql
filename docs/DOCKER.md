@@ -15,7 +15,7 @@ docker run --name some-sqld -p 8080:8080 -ti \
 ```console
 docker run --name some-sqld-replica -p 8081:8080 -ti \
     -e SQLD_NODE=replica \
-    -e SQLD_PRIMARY_URL=https://<host>:<port> \
+    -e SQLD_PRIMARY_GRPC_URL=https://<host>:<port> \
     ghcr.io/tursodatabase/libsql-server:latest
 ```
 
@@ -40,18 +40,18 @@ and stable releases please use the x86_64 versions via Rosetta._
 
 ## Data Persistence
 
-Database files are stored in the `/var/lib/sqld` in the image. To persist the
-database across runs, mount this location to either a docker volume or a bind
-mount on your local disk.
+Database files are stored in `/data` in the image (the database itself at
+`/data/sqld`). To persist the database across runs, mount this location to
+either a docker volume or a bind mount on your local disk.
 
 ```console
 docker run --name some-sqld -ti \
-    -v $(pwd)/sqld-data:/var/lib/sqld \ # you can mount local path
+    -v $(pwd)/sqld-data:/data \ # you can mount local path
     -e SQLD_NODE=primary \
     ghcr.io/tursodatabase/libsql-server:latest
 
 docker run --name some-sqld -ti \
-    -v sqld-data:/var/lib/sqld \ # or create named volume
+    -v sqld-data:/data \ # or create named volume
     -e SQLD_NODE=primary \
     ghcr.io/tursodatabase/libsql-server:latest
 
@@ -64,18 +64,18 @@ docker run --name some-sqld -ti \
 
 ## Authentication
 
-### `SQLD_HTTP_AUTH`
+### `ADMIN_KEY`
 
-Specifies legacy HTTP basic authentication. The argument must be in format `basic:$PARAM`,
-where `$PARAM` is base64-encoded string `$USERNAME:$PASSWORD`.
+The admin API key protecting the namespace management routes
+(`/v1/namespaces/*`), `/v1/diagnostics` and `/metrics`. If unset, it defaults
+to `admin-key-change-me` and the routes are always enabled — set it explicitly
+in production.
 
-### `SQLD_AUTH_JWT_KEY_FILE`
-
-Path to a file with a JWT decoding key used to authenticate clients in the Hrana and HTTP
-APIs. The key is either a PKCS#8-encoded Ed25519 public key in PEM, or just plain bytes of
-the Ed25519 public key in URL-safe base64.
-
-You can also pass the key directly in the env variable SQLD_AUTH_JWT_KEY.
+```console
+docker run --name some-sqld -p 8080:8080 -ti \
+    -e ADMIN_KEY=change-me \
+    ghcr.io/tursodatabase/libsql-server:latest
+```
 
 ## Environment variables
 
@@ -85,12 +85,12 @@ You can also pass the key directly in the env variable SQLD_AUTH_JWT_KEY.
 
 The `SQLD_NODE` environment variable configures the type of the launched
 instance. Possible values are: `primary` (default), `replica`, and `standalone`.
-Please note that replica instances also need the `SQLD_PRIMARY_URL` environment
+Please note that replica instances also need the `SQLD_PRIMARY_GRPC_URL` environment
 variable to be defined.
 
-### `SQLD_PRIMARY_URL`
+### `SQLD_PRIMARY_GRPC_URL`
 
-The `SQLD_PRIMARY_URL` environment variable configures the gRPC URL of the primary instance for replica instances.
+The `SQLD_PRIMARY_GRPC_URL` environment variable configures the gRPC URL of the primary instance for replica instances.
 
 **See:** `SQLD_NODE` environment variable
 
@@ -132,5 +132,5 @@ services:
     # environment:
     #   - SQLD_NODE=primary
     volumes:
-      - ./data/libsql:/var/lib/sqld
+      - ./data/libsql:/data
 ```

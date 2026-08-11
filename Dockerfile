@@ -72,7 +72,7 @@ RUN set -eux; \
 FROM debian:bullseye-slim
 RUN apt update
 
-EXPOSE 3000 3001
+EXPOSE 3000
 VOLUME [ "/data" ]
 
 RUN groupadd --system --gid 666 sqld
@@ -80,13 +80,10 @@ RUN adduser --system --home /var/lib/sqld --uid 666 --gid 666 sqld
 WORKDIR /var/lib/sqld
 USER sqld
 
-# MiniTurso platform configuration
+# Server configuration
 ENV SQLD_NODE=standalone
 ENV SQLD_DB_PATH=/data/sqld
-ENV ADMIN_DATA_DIR=/data/platform
 ENV SQLD_HTTP_LISTEN_ADDR=0.0.0.0:3000
-ENV ADMIN_LISTEN_ADDR=0.0.0.0:3001
-ENV ADMIN_PUBLIC_DIR=/admin-ui
 
 COPY docker-entrypoint.sh /usr/local/bin
 COPY docker-wrapper.sh /usr/local/bin
@@ -94,8 +91,6 @@ COPY docker-wrapper.sh /usr/local/bin
 COPY --from=gosu /usr/local/bin/gosu /usr/local/bin/gosu
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /target/release/sqld /bin/sqld
-
-COPY admin-ui /admin-ui
 
 USER root
 
