@@ -121,6 +121,7 @@ impl StmtKind {
             Cmd::Stmt(Stmt::Attach { .. }) => Some(Self::Attach),
             Cmd::Stmt(Stmt::Detach(_)) => Some(Self::Detach),
             Cmd::Stmt(Stmt::Reindex { .. }) => Some(Self::Write),
+            Cmd::Stmt(Stmt::Analyze(..)) => Some(Self::Write),
             _ => None,
         }
     }
@@ -297,5 +298,14 @@ mod tests {
 
         let stmt = result.next().unwrap().unwrap();
         assert_eq!(stmt.kind, StmtKind::Attach);
+    }
+
+    #[test]
+    fn test_analyze_is_write() {
+        let mut result = Statement::parse("ANALYZE");
+
+        let stmt = result.next().unwrap().unwrap();
+        assert_eq!(stmt.kind, StmtKind::Write);
+        assert!(!stmt.is_read_only());
     }
 }
