@@ -36,7 +36,6 @@ RUN if [ "$ENABLE_FEATURES" == "" ]; then \
     else \
         cargo build -p libsql-server --features "$ENABLE_FEATURES" --release --locked ; \
     fi
-RUN cargo build -p bottomless-cli --release --locked
 
 # official gosu install instruction (https://github.com/tianon/gosu/blob/master/INSTALL.md)
 FROM debian:bullseye-slim as gosu
@@ -73,13 +72,18 @@ RUN set -eux; \
 FROM debian:bullseye-slim
 RUN apt update
 
-EXPOSE 5001 8080
-VOLUME [ "/var/lib/sqld" ]
+EXPOSE 3000
+VOLUME [ "/data" ]
 
 RUN groupadd --system --gid 666 sqld
 RUN adduser --system --home /var/lib/sqld --uid 666 --gid 666 sqld
 WORKDIR /var/lib/sqld
 USER sqld
+
+# Server configuration
+ENV SQLD_NODE=standalone
+ENV SQLD_DB_PATH=/data/sqld
+ENV SQLD_HTTP_LISTEN_ADDR=0.0.0.0:3000
 
 COPY docker-entrypoint.sh /usr/local/bin
 COPY docker-wrapper.sh /usr/local/bin
@@ -87,7 +91,6 @@ COPY docker-wrapper.sh /usr/local/bin
 COPY --from=gosu /usr/local/bin/gosu /usr/local/bin/gosu
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /target/release/sqld /bin/sqld
-COPY --from=builder /target/release/bottomless-cli /bin/bottomless-cli
 
 USER root
 

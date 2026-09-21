@@ -15,6 +15,7 @@ use libsql_sys::EncryptionConfig;
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::ffi::SQLITE_CHECKPOINT_TRUNCATE;
+use serde::Serialize;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 use tokio_stream::Stream;
@@ -812,12 +813,91 @@ impl ReplicationLogger {
         Ok(true)
     }
 
+    pub fn force_compact(&self) -> anyhow::Result<bool> {
+        let mut log_file = self.log_file.write();
+        if log_file.uncommitted_frame_count != 0 {
+            anyhow::bail!("cannot compact while a write transaction is in progress");
+        }
+
+        let last_frame = {
+            let mut frames_iter = log_file.rev_frames_iter_mut()?;
+            let Some(last_frame_res) = frames_iter.next() else {
+                return Ok(false);
+            };
+            last_frame_res?
+        };
+
+        let size_after = last_frame.header().size_after.get();
+        assert!(size_after != 0);
+
+        log_file.do_compaction(self.compactor.clone(), &self.db_path)?;
+        Ok(true)
+    }
+
     pub(crate) fn compactor(&self) -> &LogCompactor {
         &self.compactor
     }
 
     pub(crate) fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    pub fn replication_info(&self) -> ReplicationInfo {
+        let log_file = self.log_file.read();
+        ReplicationInfo {
+            kind: "primary",
+            is_primary: true,
+            replication_index: log_file.header().last_frame_no(),
+            generation_id: Some(self.generation.id.to_string()),
+            generation_start_index: Some(self.generation.start_index),
+            log_id: Some(log_file.header.log_id.to_string()),
+            page_size: Some(log_file.header.page_size.get() as u32),
+            wallog_start_frame_no: Some(log_file.header.start_frame_no.get()),
+            wallog_frame_count: Some(log_file.header.frame_count.get()),
+            max_log_frame_count: Some(log_file.max_log_frame_count),
+            max_log_duration_secs: log_file.max_log_duration.map(|d| d.as_secs_f32()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplicationInfo {
+    pub kind: &'static str,
+    pub is_primary: bool,
+    pub replication_index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_start_index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallog_start_frame_no: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallog_frame_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_log_frame_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_log_duration_secs: Option<f32>,
+}
+
+impl ReplicationInfo {
+    pub fn replica() -> Self {
+        ReplicationInfo {
+            kind: "replica",
+            is_primary: false,
+            replication_index: None,
+            generation_id: None,
+            generation_start_index: None,
+            log_id: None,
+            page_size: None,
+            wallog_start_frame_no: None,
+            wallog_frame_count: None,
+            max_log_frame_count: None,
+            max_log_duration_secs: None,
+        }
     }
 }
 

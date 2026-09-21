@@ -13,3 +13,13 @@ libsql-sqlite3/**.o.tmp
 /bindings/c/generated
 /bindings/c/**.xcframework
 /bindings/**/.DS_Store
+# MiniTurso platform
+miniturso-data/
+data.sqld/
+/dev.sh
+.codegraph/
+
+# staged admin UI build for the container image
+/admin-ui/
+/sqld-release/
+/tools/__pycache__/

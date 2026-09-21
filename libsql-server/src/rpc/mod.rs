@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hyper_rustls::TlsAcceptor;
 use libsql_replication::rpc::replication::replication_log_server::ReplicationLogServer;
-use libsql_replication::rpc::replication::{BoxReplicationService, NAMESPACE_METADATA_KEY};
+use libsql_replication::rpc::replication::BoxReplicationService;
 use rustls::server::AllowAnyAuthenticatedClient;
 use rustls::RootCertStore;
 use tonic::Status;
@@ -122,15 +122,17 @@ fn extract_namespace<T>(
         return Ok(NamespaceName::default());
     }
 
-    if let Some(namespace) = req.metadata().get_bin(NAMESPACE_METADATA_KEY) {
-        let bytes = namespace
-            .to_bytes()
-            .map_err(|_| Status::invalid_argument("Metadata can't be converted into Bytes"))?;
-        NamespaceName::from_bytes(bytes)
-            .map_err(|_| Status::invalid_argument("Invalid namespace name"))
-    } else {
-        Err(Status::invalid_argument("Missing x-namespace-bin metadata"))
+    if let Some(ns) = req.metadata().get("x-namespace") {
+        if let Ok(ns_str) = ns.to_str() {
+            if let Ok(namespace) = NamespaceName::from_string(ns_str.to_string()) {
+                return Ok(namespace);
+            }
+        }
     }
+
+    Err(Status::invalid_argument(
+        "Missing or invalid x-namespace metadata",
+    ))
 }
 
 fn trace_request<B>(req: &hyper::Request<B>, span: &Span) {

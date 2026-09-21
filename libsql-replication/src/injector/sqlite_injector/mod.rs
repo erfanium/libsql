@@ -7,6 +7,7 @@ use rusqlite::OpenFlags;
 use tokio::task::spawn_blocking;
 
 use crate::frame::{Frame, FrameNo};
+#[cfg(feature = "network")]
 use crate::rpc::replication::Frame as RpcFrame;
 
 use self::injector_wal::{
@@ -14,7 +15,9 @@ use self::injector_wal::{
 };
 
 use super::error::Result;
-use super::{Error, Injector};
+use super::Error;
+#[cfg(feature = "network")]
+use super::Injector;
 
 mod headers;
 mod injector_wal;
@@ -25,6 +28,31 @@ pub struct SqliteInjector {
     pub(in super::super) inner: Arc<Mutex<SqliteInjectorInner>>,
 }
 
+impl SqliteInjector {
+    /// Inject a frame into the log. If this was a commit frame, returns the committed
+    /// `FrameNo`. Network-free: callers that implement the sync protocol themselves
+    /// (e.g. mobile clients) feed already-parsed `Frame`s through this API.
+    pub async fn inject(&self, frame: Frame) -> Result<Option<FrameNo>> {
+        let inner = self.inner.clone();
+        spawn_blocking(move || inner.lock().inject_frame(frame))
+            .await
+            .unwrap()
+    }
+
+    pub async fn rollback(&self) {
+        let inner = self.inner.clone();
+        spawn_blocking(move || inner.lock().rollback())
+            .await
+            .unwrap();
+    }
+
+    pub async fn flush(&self) -> Result<Option<FrameNo>> {
+        let inner = self.inner.clone();
+        spawn_blocking(move || inner.lock().flush()).await.unwrap()
+    }
+}
+
+#[cfg(feature = "network")]
 impl Injector for SqliteInjector {
     async fn inject_frame(&mut self, frame: RpcFrame) -> Result<Option<FrameNo>> {
         let inner = self.inner.clone();

@@ -45,6 +45,10 @@ pub struct RequestContext {
     /// current namespace
     namespace: NamespaceName,
     meta_store: MetaStore,
+    /// When set, the request is served by the read-only public port and
+    /// every write/DDL/attach statement is rejected (see
+    /// `check_program_auth`).
+    read_only: bool,
 }
 
 impl RequestContext {
@@ -53,7 +57,14 @@ impl RequestContext {
             auth,
             namespace,
             meta_store,
+            read_only: false,
         }
+    }
+
+    /// Mark this request as served by the read-only public port.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
     }
 
     pub fn upgrade_grpc_request<T>(&self, req: &mut tonic::Request<T>) {
@@ -69,6 +80,10 @@ impl RequestContext {
 
     pub fn auth(&self) -> &Authenticated {
         &self.auth
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 }
 

@@ -1,141 +1,14 @@
 use std::fmt::Display;
-use std::pin::Pin;
 use std::str::FromStr;
 
-use bytes::Bytes;
 use dialoguer::BasicHistory;
-use rusqlite::types::ValueRef;
-use tokio_stream::{Stream, StreamExt as _};
-use tonic::metadata::{AsciiMetadataValue, BinaryMetadataValue};
+use tokio_stream::StreamExt as _;
+use tonic::metadata::AsciiMetadataValue;
 
-use crate::connection::Connection as _;
-use crate::database::Connection;
-use crate::namespace::{NamespaceName, NamespaceStore};
-
-use self::rpc::admin_shell_service_server::{AdminShellService, AdminShellServiceServer};
-use self::rpc::response::Resp;
-use self::rpc::Null;
-
+use crate::namespace::NamespaceName;
 mod rpc {
     #![allow(clippy::all)]
     include!("generated/admin_shell.rs");
-}
-
-pub(crate) fn make_svc(namespace_store: NamespaceStore) -> AdminShellServiceServer<AdminShell> {
-    let admin_shell = AdminShell::new(namespace_store);
-    rpc::admin_shell_service_server::AdminShellServiceServer::new(admin_shell)
-}
-
-pub(super) struct AdminShell {
-    namespace_store: NamespaceStore,
-}
-
-impl AdminShell {
-    fn new(namespace_store: NamespaceStore) -> Self {
-        Self { namespace_store }
-    }
-
-    async fn with_namespace(
-        &self,
-        ns: Bytes,
-        queries: impl Stream<Item = Result<rpc::Query, tonic::Status>>,
-    ) -> anyhow::Result<impl Stream<Item = Result<rpc::Response, tonic::Status>>> {
-        let namespace = NamespaceName::from_bytes(ns).unwrap();
-        let connection_maker = self
-            .namespace_store
-            .with(namespace, |ns| ns.db.connection_maker())
-            .await?;
-        let connection = connection_maker.create().await?;
-        Ok(run_shell(connection, queries))
-    }
-}
-
-fn run_shell(
-    conn: Connection,
-    queries: impl Stream<Item = Result<rpc::Query, tonic::Status>>,
-) -> impl Stream<Item = Result<rpc::Response, tonic::Status>> {
-    async_stream::stream! {
-        tokio::pin!(queries);
-        while let Some(q) = queries.next().await {
-            let Ok(q) = q else { break };
-            let res = tokio::task::block_in_place(|| {
-                conn.with_raw(move |conn| {
-                    run_one(conn, q.query)
-                })
-            });
-
-            yield res
-        }
-    }
-}
-
-fn run_one(conn: &mut rusqlite::Connection, q: String) -> Result<rpc::Response, tonic::Status> {
-    match try_run_one(conn, q) {
-        Ok(resp) => Ok(resp),
-        Err(e) => Ok(rpc::Response {
-            resp: Some(Resp::Error(rpc::Error {
-                error: e.to_string(),
-            })),
-        }),
-    }
-}
-
-fn try_run_one(conn: &mut rusqlite::Connection, q: String) -> anyhow::Result<rpc::Response> {
-    let mut stmt = conn.prepare(&q)?;
-    let col_count = stmt.column_count();
-    let mut rows = stmt.query(())?;
-    let mut out_rows = Vec::new();
-    while let Some(row) = rows.next()? {
-        let mut out_row = Vec::with_capacity(col_count);
-        for i in 0..col_count {
-            let rpc_value = match row.get_ref(i).unwrap() {
-                ValueRef::Null => rpc::value::Value::Null(Null {}),
-                ValueRef::Integer(i) => rpc::value::Value::Integer(i),
-                ValueRef::Real(x) => rpc::value::Value::Real(x),
-                ValueRef::Text(s) => rpc::value::Value::Text(String::from_utf8(s.to_vec())?),
-                ValueRef::Blob(b) => rpc::value::Value::Blob(b.to_vec()),
-            };
-            out_row.push(rpc::Value {
-                value: Some(rpc_value),
-            });
-        }
-        out_rows.push(rpc::Row { values: out_row });
-    }
-
-    Ok(rpc::Response {
-        resp: Some(Resp::Rows(rpc::Rows { rows: out_rows })),
-    })
-}
-
-#[async_trait::async_trait]
-impl AdminShellService for AdminShell {
-    type ShellStream = Pin<Box<dyn Stream<Item = Result<rpc::Response, tonic::Status>> + Send>>;
-
-    async fn shell(
-        &self,
-        request: tonic::Request<tonic::Streaming<rpc::Query>>,
-    ) -> std::result::Result<tonic::Response<Self::ShellStream>, tonic::Status> {
-        let Some(namespace) = request.metadata().get_bin("x-namespace-bin") else {
-            return Err(tonic::Status::new(
-                tonic::Code::InvalidArgument,
-                "missing namespace",
-            ));
-        };
-        let Ok(ns_bytes) = namespace.to_bytes() else {
-            return Err(tonic::Status::new(
-                tonic::Code::InvalidArgument,
-                "bad namespace encoding",
-            ));
-        };
-
-        match self.with_namespace(ns_bytes, request.into_inner()).await {
-            Ok(s) => Ok(tonic::Response::new(Box::pin(s))),
-            Err(e) => Err(tonic::Status::new(
-                tonic::Code::FailedPrecondition,
-                e.to_string(),
-            )),
-        }
-    }
 }
 
 pub struct AdminShellClient {
@@ -158,9 +31,9 @@ impl AdminShellClient {
         let req_stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
 
         let mut req = tonic::Request::new(req_stream);
-        req.metadata_mut().insert_bin(
-            "x-namespace-bin",
-            BinaryMetadataValue::from_bytes(namespace.as_slice()),
+        req.metadata_mut().insert(
+            "x-namespace",
+            AsciiMetadataValue::from_str(namespace.as_str()).unwrap(),
         );
 
         if let Some(ref auth) = self.auth {

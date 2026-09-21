@@ -3,14 +3,12 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use hyper::client::HttpConnector;
-use hyper_rustls::HttpsConnector;
 use libsql_sys::EncryptionConfig;
 use sha256::try_digest;
 use tokio::time::Duration;
 use tonic::transport::Channel;
 use tower::ServiceExt;
 
-use crate::auth::{Auth, Disabled};
 use crate::net::{AddrIncoming, Connector};
 
 pub struct RpcClientConfig<C = HttpConnector> {
@@ -58,32 +56,21 @@ pub struct RpcServerConfig<A = AddrIncoming> {
 }
 
 pub struct UserApiConfig<A = AddrIncoming> {
-    pub hrana_ws_acceptor: Option<A>,
     pub http_acceptor: Option<A>,
     pub enable_http_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
-    pub auth_strategy: Auth,
 }
 
 impl<A> Default for UserApiConfig<A> {
     fn default() -> Self {
         Self {
-            hrana_ws_acceptor: Default::default(),
             http_acceptor: Default::default(),
             enable_http_console: Default::default(),
             self_url: Default::default(),
             primary_url: Default::default(),
-            auth_strategy: Auth::new(Disabled::new()),
         }
     }
-}
-
-pub struct AdminApiConfig<A = AddrIncoming, C = HttpsConnector<HttpConnector>> {
-    pub acceptor: A,
-    pub connector: C,
-    pub disable_metrics: bool,
-    pub auth_key: Option<String>,
 }
 
 #[derive(Clone)]

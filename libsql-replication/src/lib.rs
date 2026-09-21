@@ -1,8 +1,12 @@
 pub mod frame;
 pub mod injector;
+#[cfg(feature = "network")]
 pub mod meta;
+#[cfg(feature = "network")]
 pub mod replicator;
+#[cfg(feature = "network")]
 pub mod rpc;
+#[cfg(feature = "network")]
 pub mod snapshot;
 
 mod error;

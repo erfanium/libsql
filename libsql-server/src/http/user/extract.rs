@@ -1,9 +1,6 @@
 use axum::extract::FromRequestParts;
 
-use crate::{
-    auth::{Auth, Jwt},
-    connection::RequestContext,
-};
+use crate::connection::RequestContext;
 
 use super::{db_factory, AppState};
 
@@ -15,26 +12,9 @@ impl FromRequestParts<AppState> for RequestContext {
         parts: &mut axum::http::request::Parts,
         state: &AppState,
     ) -> std::result::Result<Self, Self::Rejection> {
-        let namespace = db_factory::namespace_from_headers(
-            &parts.headers,
-            state.disable_default_namespace,
-            state.disable_namespaces,
-        )?;
-        // todo dupe #auth
-        let namespace_jwt_keys = state
-            .namespaces
-            .with(namespace.clone(), |ns| ns.jwt_keys())
-            .await??;
-
-        let auth = namespace_jwt_keys
-            .map(Jwt::new)
-            .map(Auth::new)
-            .unwrap_or_else(|| state.user_auth_strategy.clone());
-
-        let context = super::build_context(&parts.headers, &auth.user_strategy.required_fields());
-
+        let (auth, namespace) = db_factory::authenticate_request(parts, state).await?;
         Ok(Self::new(
-            auth.authenticate(context)?,
+            auth,
             namespace,
             state.namespaces.meta_store().clone(),
         ))
