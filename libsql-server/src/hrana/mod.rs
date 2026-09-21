@@ -4,6 +4,7 @@ pub mod batch;
 mod cursor;
 pub mod http;
 mod result_builder;
+mod stmt_cache;
 pub mod stmt;
 pub use libsql_hrana::proto;
 
