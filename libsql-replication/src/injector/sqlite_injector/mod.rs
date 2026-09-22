@@ -79,6 +79,24 @@ impl Injector for SqliteInjector {
     fn durable_frame_no(&mut self, _frame_no: u64) {}
 }
 
+/// Runtime-free API for callers that drive injection from their own threads (mobile clients).
+impl SqliteInjector {
+    pub fn open_blocking(path: PathBuf, capacity: usize, auto_checkpoint: u32) -> Result<Self> {
+        let inner = SqliteInjectorInner::new(path, capacity, auto_checkpoint, None)?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(inner)),
+        })
+    }
+
+    pub fn inject_blocking(&self, frame: Frame) -> Result<Option<FrameNo>> {
+        self.inner.lock().inject_frame(frame)
+    }
+
+    pub fn rollback_blocking(&self) {
+        self.inner.lock().rollback()
+    }
+}
+
 impl SqliteInjector {
     pub async fn new(
         path: PathBuf,
