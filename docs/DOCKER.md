@@ -100,11 +100,10 @@ The `SQLD_PRIMARY_GRPC_URL` environment variable configures the gRPC URL of the 
 
 ### `SQLD_DB_PATH`
 
-**default:** `iku.db`
+**default:** `/data/sqld`
 
-The location of the db file inside the container. Specifying only a filename
-will place the file in the default directory inside the container at
-`/var/lib/sqld`.
+The location of the database inside the container. Specifying only a filename
+will place it in the working directory of the container, `/data`.
 
 ### `SQLD_HTTP_LISTEN_ADDR`
 

@@ -119,15 +119,15 @@ docker volume create sqld-data
 ### 5. Run sqld in a container
 
 The following uses the built image to create and run a new container named
-`sqld`, attaching the `sqld-data` volume to it, and exposing its port 8080
+`sqld`, attaching the `sqld-data` volume to it, and exposing its port 3000
 locally:
 
 ```bash
 docker container run \
   -d \
   --name sqld \
-  -v sqld-data:/var/lib/sqld \
-  -p 127.0.0.1:8080:8080 \
+  -v sqld-data:/data \
+  -p 127.0.0.1:3000:3000 \
   libsql/sqld:latest
 ```
 

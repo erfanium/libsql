@@ -73,11 +73,11 @@ FROM debian:bookworm-slim
 RUN apt update
 
 EXPOSE 3000
-VOLUME [ "/data" ]
 
 RUN groupadd --system --gid 666 sqld
-RUN adduser --system --home /var/lib/sqld --uid 666 --gid 666 sqld
-WORKDIR /var/lib/sqld
+RUN adduser --system --home /data --uid 666 --gid 666 sqld
+WORKDIR /data
+VOLUME [ "/data" ]
 USER sqld
 
 # Server configuration
