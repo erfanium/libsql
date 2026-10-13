@@ -108,7 +108,7 @@ impl<'a, B, F, S> Vm<'a, B, F, S>
 where
     B: QueryResultBuilder,
     F: Fn(&StmtKind) -> (bool, Option<String>),
-    S: Fn(String, u64, u64, u64, Duration),
+    S: Fn(u64, u64, u64, Duration),
 {
     pub fn new(
         builder: B,
@@ -283,13 +283,7 @@ where
         let rows_written = stmt.get_status(StatementStatus::RowsWritten) as u32 as u64;
         let mem_used = stmt.get_status(StatementStatus::MemUsed) as u64;
 
-        (self.update_stats)(
-            self.current_step().query.stmt.stmt.clone(),
-            rows_read,
-            rows_written,
-            mem_used,
-            query_duration,
-        );
+        (self.update_stats)(rows_read, rows_written, mem_used, query_duration);
 
         self.builder
             .add_stats(rows_read, rows_written, query_duration);

@@ -40,14 +40,12 @@ pub(super) struct CoreConnection<W> {
 
 fn update_stats(
     stats: &Stats,
-    sql: String,
     rows_read: u64,
     rows_written: u64,
     mem_used: u64,
     elapsed: Duration,
 ) {
     stats.send(StatsUpdateMessage {
-        sql,
         elapsed,
         rows_read,
         rows_written,
@@ -220,8 +218,8 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
                     should_block.then(|| config.block_reason.clone()).flatten(),
                 )
             },
-            move |sql, rows_read, rows_written, mem_used, elapsed| {
-                update_stats(&stats, sql, rows_read, rows_written, mem_used, elapsed)
+            move |rows_read, rows_written, mem_used, elapsed| {
+                update_stats(&stats, rows_read, rows_written, mem_used, elapsed)
             },
             resolve_attach_path,
         );

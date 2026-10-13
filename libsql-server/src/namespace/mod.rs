@@ -79,6 +79,7 @@ impl Namespace {
     }
 
     async fn checkpoint(&self) -> anyhow::Result<()> {
+        self.stats.touch();
         let conn = self.db.connection_maker().create().await?;
         conn.vacuum_if_needed().await?;
         conn.checkpoint().await?;
@@ -89,6 +90,7 @@ impl Namespace {
         let Some(logger) = self.db.logger() else {
             anyhow::bail!("namespace is not a primary, cannot compact");
         };
+        self.stats.touch();
         BLOCKING_RT
             .spawn_blocking(move || logger.force_compact())
             .await?
@@ -111,6 +113,9 @@ impl Namespace {
 
     async fn shutdown(mut self, should_checkpoint: bool) -> anyhow::Result<()> {
         self.tasks.shutdown().await;
+        if let Err(e) = self.stats.persist().await {
+            tracing::error!("error persisting stats file: {e}");
+        }
         if should_checkpoint {
             self.checkpoint().await?;
         }

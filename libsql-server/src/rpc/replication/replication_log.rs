@@ -142,6 +142,9 @@ impl ReplicationLogService {
             self.verify_session_token(req, version)?;
         }
 
+        // a replica that syncs is a use of the namespace, even when there is nothing to send
+        stats.touch();
+
         Ok((logger, config, version, stats, config_changed))
     }
 
