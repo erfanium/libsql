@@ -135,6 +135,11 @@ where
         &self.program.steps()[self.current_step]
     }
 
+    /// Index of the step that is about to be executed.
+    pub fn current_step_index(&self) -> usize {
+        self.current_step
+    }
+
     pub fn step(&mut self, conn: &rusqlite::Connection) -> crate::Result<bool> {
         match self.try_step(conn) {
             Ok(res) => {
@@ -354,6 +359,24 @@ pub async fn check_program_auth(
     config: &DatabaseConfig,
 ) -> crate::Result<()> {
     for step in pgm.steps() {
+        // The public port is strictly read-only: reject any statement that
+        // could modify state, regardless of what the token claims.
+        if ctx.is_read_only() {
+            match &step.query.stmt.kind {
+                StmtKind::Write | StmtKind::DDL => {
+                    return Err(Error::Forbidden(
+                        "writes are not allowed on the public port".to_string(),
+                    ))
+                }
+                StmtKind::Attach(_) => {
+                    return Err(Error::Forbidden(
+                        "attach is not allowed on the public port".to_string(),
+                    ))
+                }
+                _ => {}
+            }
+        }
+
         match &step.query.stmt.kind {
             StmtKind::TxnBegin
             | StmtKind::TxnEnd

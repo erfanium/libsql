@@ -152,7 +152,8 @@ impl ForkTask {
                 .await
                 .map_err(ForkError::Internal)?;
         } else {
-            Self::restore_from_log_file(&self.logger, db_path).await?;
+            Self::restore_from_log_file(&self.logger, db_path, self.to_namespace.clone())
+                .await?;
         }
 
         let dest_path = self.base_path.join("dbs").join(self.to_namespace.as_str());
@@ -168,6 +169,7 @@ impl ForkTask {
     async fn restore_from_log_file(
         logger: &Arc<ReplicationLogger>,
         db_path: PathBuf,
+        namespace: crate::namespace::NamespaceName,
     ) -> Result<()> {
         let mut data_file = File::create(db_path).await?;
         let end_frame_no = *logger.new_frame_notifier.borrow();
@@ -175,9 +177,16 @@ impl ForkTask {
             let mut next_frame_no = 0;
             while next_frame_no < end_frame_no {
                 let mut streamer =
-                    FrameStream::new(logger.clone(), next_frame_no, false, None, None)
-                        .map_err(|e| ForkError::LogRead(e.into()))?
-                        .map_ok(|(f, _)| f);
+                    FrameStream::new_with_namespace(
+                        logger.clone(),
+                        next_frame_no,
+                        false,
+                        None,
+                        None,
+                        Some(namespace.clone()),
+                    )
+                    .map_err(|e| ForkError::LogRead(e.into()))?
+                    .map_ok(|(f, _)| f);
                 while let Some(res) = streamer.next().await {
                     match res {
                         Ok(frame) => {

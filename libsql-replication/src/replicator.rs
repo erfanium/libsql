@@ -139,6 +139,7 @@ pub struct Replicator<C, I> {
     injector: I,
     state: ReplicatorState,
     frames_synced: usize,
+    progress: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     max_handshake_retries: usize,
 }
 
@@ -186,6 +187,7 @@ where
             injector,
             state: ReplicatorState::NeedHandshake,
             frames_synced: 0,
+            progress: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             max_handshake_retries: HANDSHAKE_MAX_RETRIES,
         }
     }
@@ -193,6 +195,15 @@ where
     /// force a handshake on next call to replicate.
     pub fn force_handshake(&mut self) {
         self.state = ReplicatorState::NeedHandshake;
+    }
+
+    /// Run only the handshake step (does not download frames). The primary's
+    /// current replication index becomes available on the client afterwards.
+    pub async fn perform_handshake(&mut self) -> Result<(), Error> {
+        if self.state == ReplicatorState::NeedHandshake {
+            self.try_perform_handshake().await?;
+        }
+        Ok(())
     }
 
     /// configure number of handshake retries.
@@ -327,6 +338,8 @@ where
 
     async fn inject_frame(&mut self, frame: RpcFrame) -> Result<(), Error> {
         self.frames_synced += 1;
+        self.progress
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if let Some(frame_no) = frame.durable_frame_no {
             self.injector.durable_frame_no(frame_no);
@@ -355,6 +368,12 @@ where
 
     pub fn frames_synced(&self) -> usize {
         self.frames_synced
+    }
+
+    /// Shared, lock-free progress counter (frames injected so far). Readable
+    /// from another thread while the replicator is busy syncing.
+    pub fn progress_counter(&self) -> &std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        &self.progress
     }
 }
 

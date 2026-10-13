@@ -18,8 +18,7 @@ use rusqlite::types::ValueRef;
 use tokio::time::Duration;
 use uuid::Uuid;
 
-use crate::auth::parsers::parse_grpc_auth_header;
-use crate::auth::{Auth, Authenticated, Jwt};
+use crate::auth::Authenticated;
 use crate::connection::{Connection as _, RequestContext};
 use crate::database::Connection;
 use crate::namespace::NamespaceStore;
@@ -277,20 +276,14 @@ pub mod rpc {
 pub struct ProxyService {
     clients: Arc<RwLock<HashMap<Uuid, Arc<TimeoutConnection>>>>,
     namespaces: NamespaceStore,
-    user_auth_strategy: Option<Auth>,
     disable_namespaces: bool,
 }
 
 impl ProxyService {
-    pub fn new(
-        namespaces: NamespaceStore,
-        user_auth_strategy: Option<Auth>,
-        disable_namespaces: bool,
-    ) -> Self {
+    pub fn new(namespaces: NamespaceStore, disable_namespaces: bool) -> Self {
         Self {
             clients: Default::default(),
             namespaces,
-            user_auth_strategy,
             disable_namespaces,
         }
     }
@@ -304,38 +297,8 @@ impl ProxyService {
         req: &mut tonic::Request<T>,
     ) -> Result<RequestContext, tonic::Status> {
         let namespace = super::extract_namespace(self.disable_namespaces, req)?;
-        // todo dupe #auth
-        let namespace_jwt_keys = self
-            .namespaces
-            .with(namespace.clone(), |ns| ns.jwt_keys())
-            .await;
 
-        let auth = match namespace_jwt_keys {
-            Ok(Ok(Some(key))) => Some(Auth::new(Jwt::new(key))),
-            Ok(Ok(None)) => self.user_auth_strategy.clone(),
-            Err(e) => match e.as_ref() {
-                crate::error::Error::NamespaceDoesntExist(_) => None,
-                _ => Err(tonic::Status::internal(format!(
-                    "Error fetching jwt key for a namespace: {}",
-                    e
-                )))?,
-            },
-            Ok(Err(e)) => Err(tonic::Status::internal(format!(
-                "Error fetching jwt key for a namespace: {}",
-                e
-            )))?,
-        };
-
-        let auth = if let Some(auth) = auth {
-            let context =
-                parse_grpc_auth_header(req.metadata(), &auth.user_strategy.required_fields())
-                    .map_err(|e| {
-                        tonic::Status::internal(format!("Error parsing auth header: {}", e))
-                    })?;
-            auth.authenticate(context)?
-        } else {
-            Authenticated::from_proxy_grpc_request(req)?
-        };
+        let auth = Authenticated::FullAccess;
 
         Ok(RequestContext::new(
             auth,

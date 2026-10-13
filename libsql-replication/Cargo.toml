@@ -8,8 +8,8 @@ repository.workspace = true
 description = "Replication protocol for libSQL"
 
 [dependencies]
-tonic = { version = "0.11", default-features = false, features = ["codegen", "prost"] }
-prost = "0.12"
+tonic = { version = "0.11", default-features = false, features = ["codegen", "prost"], optional = true }
+prost = { version = "0.12", optional = true }
 libsql-sys = { workspace = true, default-features = false, features = ["wal", "rusqlite", "api"] }
 rusqlite = { workspace = true }
 parking_lot = "0.12.1"
@@ -18,11 +18,11 @@ serde = { version = "1.0.189", features = ["derive"] }
 thiserror = "1.0.49"
 tracing = "0.1.40"
 tokio = { version = "1.33.0", features = ["full"] }
-tokio-stream = "0.1.14"
-async-trait = "0.1.74"
-uuid = { version = "1.5.0", features = ["v4"] }
-tokio-util = "0.7.9"
-async-stream = "0.3.5"
+tokio-stream = { version = "0.1.14", optional = true }
+async-trait = { version = "0.1.74", optional = true }
+uuid = { version = "1.5.0", features = ["v4"], optional = true }
+tokio-util = { version = "0.7.9", optional = true }
+async-stream = { version = "0.3.5", optional = true }
 zerocopy = { version = "0.7.28", features = ["derive"] }
 aes = "0.8.3"
 cbc = "0.1.2"
@@ -35,4 +35,17 @@ prost-build = "0.12"
 tonic-build = "0.11"
 
 [features]
+default = ["network"]
+# The network stack (gRPC RPCs, replicator state machine, meta file, snapshot
+# files). Disable it to build the crate as a frame-level replication *injector*
+# only (used by mobile clients that implement the sync protocol themselves).
+network = [
+    "dep:tonic",
+    "dep:prost",
+    "dep:tokio-stream",
+    "dep:async-trait",
+    "dep:async-stream",
+    "dep:uuid",
+    "dep:tokio-util",
+]
 encryption = ["libsql-sys/encryption"]

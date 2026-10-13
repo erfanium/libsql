@@ -411,6 +411,16 @@ cfg_replication! {
             }
         }
 
+        /// Lock-free clone progress: (frames synced, target frames). Safe to call
+        /// from another thread while `sync` is still running.
+        pub fn sync_progress(&self) -> (usize, u64) {
+            match &self.db_type {
+                #[cfg(feature = "replication")]
+                DbType::Sync { db, encryption_config: _ } => db.sync_progress(),
+                _ => (0, 0),
+            }
+        }
+
         /// Sync database from remote until it gets to a given replication_index or further,
         /// and returns the committed frame_no after syncing, if applicable.
         pub async fn sync_until(&self, replication_index: FrameNo) -> Result<Replicated> {

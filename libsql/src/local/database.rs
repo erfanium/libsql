@@ -320,9 +320,15 @@ impl Database {
             // Ensure that we are configured with the correct threading model
             // if this config is not set correctly the entire api is unsafe.
             unsafe {
-                assert_eq!(
-                    ffi::sqlite3_config(ffi::SQLITE_CONFIG_SERIALIZED),
-                    ffi::SQLITE_OK,
+                // sqlite3_config() returns SQLITE_MISUSE once sqlite3 has been
+                // initialized. That's expected when a connection (e.g. the frame
+                // injector) was opened before the first Database::new: the
+                // threading model is already the compile-time default
+                // (SQLITE_THREADSAFE=1 => serialized), so a misconfigured
+                // override is impossible without an explicit config call.
+                let rc = ffi::sqlite3_config(ffi::SQLITE_CONFIG_SERIALIZED);
+                assert!(
+                    rc == ffi::SQLITE_OK || rc == ffi::SQLITE_MISUSE,
                     "libsql was configured with an incorrect threading configuration and
                     the api is not safe to use. Please check that no multi-thread options have
                     been set. If nothing was configured then please open an issue at:
@@ -391,6 +397,17 @@ impl Database {
     /// Sync with primary
     pub async fn sync(&self) -> Result<crate::database::Replicated> {
         Ok(self.sync_oneshot().await?)
+    }
+
+    #[cfg(feature = "replication")]
+    /// Lock-free clone progress: (frames synced, target frames). Safe to call
+    /// while `sync` is still running.
+    pub fn sync_progress(&self) -> (usize, u64) {
+        if let Some(ctx) = &self.replication_ctx {
+            ctx.replicator.sync_progress()
+        } else {
+            (0, 0)
+        }
     }
 
     #[cfg(feature = "replication")]

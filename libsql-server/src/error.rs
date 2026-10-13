@@ -3,7 +3,6 @@ use hyper::StatusCode;
 use tonic::metadata::errors::InvalidMetadataValueBytes;
 
 use crate::{
-    auth::AuthError,
     namespace::{configurator::fork::ForkError, NamespaceName},
     query_result_builder::QueryResultBuilderError,
 };
@@ -55,8 +54,6 @@ pub enum Error {
     FailedToParse(String),
     #[error("Query error: `{0}`")]
     QueryError(String),
-    #[error("Unauthorized: `{0}`")]
-    AuthError(#[from] AuthError),
     // Catch-all error since we use anyhow in certain places
     #[error("Internal Error: `{0}`")]
     Anyhow(#[from] anyhow::Error),
@@ -161,7 +158,6 @@ impl IntoResponse for &Error {
 
         match self {
             FailedToParse(_) => self.format_err(StatusCode::BAD_REQUEST),
-            AuthError(_) => self.format_err(StatusCode::UNAUTHORIZED),
             Anyhow(e) => match e.downcast_ref::<Error>() {
                 Some(err) => err.into_response(),
                 None => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),

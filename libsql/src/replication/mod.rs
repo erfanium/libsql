@@ -167,6 +167,8 @@ pub(crate) struct EmbeddedReplicator {
     replicator: Arc<Mutex<Replicator<Either<RemoteClient, LocalClient>, SqliteInjector>>>,
     bg_abort: Option<Arc<DropAbort>>,
     last_frames_synced: Arc<AtomicUsize>,
+    progress: Arc<AtomicUsize>,
+    target_index: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl From<libsql_replication::replicator::Error> for errors::Error {
@@ -191,12 +193,15 @@ impl EmbeddedReplicator {
                 encryption_config,
             ).await?;
         replicator.set_primary_handshake_retries(3);
+        let progress = replicator.progress_counter().clone();
         let replicator = Arc::new(Mutex::new(replicator));
 
         let mut replicator = Self {
             replicator,
             bg_abort: None,
             last_frames_synced: Arc::new(AtomicUsize::new(0)),
+            progress,
+            target_index: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         if let Some(sync_duration) = perodic_sync {
@@ -227,21 +232,32 @@ impl EmbeddedReplicator {
         auto_checkpoint: u32,
         encryption_config: Option<EncryptionConfig>,
     ) -> Result<Self> {
-        let replicator = Arc::new(Mutex::new(
-            Replicator::new_sqlite(
-                Either::Right(client),
-                db_path,
-                auto_checkpoint,
-                encryption_config,
-            )
-            .await?,
-        ));
+        let mut replicator = Replicator::new_sqlite(
+            Either::Right(client),
+            db_path,
+            auto_checkpoint,
+            encryption_config,
+        )
+        .await?;
+        let progress = replicator.progress_counter().clone();
+        let replicator = Arc::new(Mutex::new(replicator));
 
         Ok(Self {
             replicator,
             bg_abort: None,
             last_frames_synced: Arc::new(AtomicUsize::new(0)),
+            progress,
+            target_index: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
+    }
+
+    /// Lock-free clone progress: (frames synced, target frames). Safe to call
+    /// from another thread while `sync_oneshot` is still running.
+    pub fn sync_progress(&self) -> (usize, u64) {
+        (
+            self.progress.load(std::sync::atomic::Ordering::Relaxed),
+            self.target_index.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     pub async fn get_sync_usage_stats(&self) -> Result<SyncUsageStats> {
@@ -283,8 +299,19 @@ impl EmbeddedReplicator {
             ));
         }
 
-        // we force a handshake to get the most up to date replication index from the primary.
+        // perform the handshake first so the primary's current replication
+        // index is known before any frames are downloaded — this makes the
+        // clone target available to sync_progress() from the very start
         replicator.force_handshake();
+        replicator.perform_handshake().await?;
+
+        if let Some(primary_index) = match replicator.client_mut() {
+            Either::Left(client) => client.last_handshake_replication_index(),
+            Either::Right(_) => None,
+        } {
+            self.target_index
+                .store(primary_index, std::sync::atomic::Ordering::Relaxed);
+        }
 
         loop {
             match replicator.replicate().await {
@@ -301,17 +328,8 @@ impl EmbeddedReplicator {
                 }
                 Err(e) => return Err(crate::Error::Replication(e.into())),
                 Ok(_) => {
-                    let Either::Left(client) = replicator.client_mut() else {
-                        unreachable!()
-                    };
-                    let Some(primary_index) = client.last_handshake_replication_index() else {
-                        return Ok(Replicated {
-                            frame_no: None,
-                            frames_synced: 0,
-                        });
-                    };
                     if let Some(replica_index) = replicator.client_mut().committed_frame_no() {
-                        if replica_index >= primary_index {
+                        if replica_index >= self.target_index.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }
                     }

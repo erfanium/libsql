@@ -4,11 +4,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use clap::Parser;
 use hyper::client::HttpConnector;
-use libsql_server::auth::{parse_http_basic_auth_arg, parse_jwt_keys, user_auth_strategies, Auth};
 use tokio::sync::Notify;
 use tokio::time::Duration;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -16,7 +15,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 use libsql_server::config::{
-    AdminApiConfig, BottomlessConfig, DbConfig, HeartbeatConfig, MetaStoreConfig, RpcClientConfig,
+    BottomlessConfig, DbConfig, HeartbeatConfig, MetaStoreConfig, RpcClientConfig,
     RpcServerConfig, TlsConfig, UserApiConfig,
 };
 use libsql_server::net::AddrIncoming;
@@ -40,35 +39,13 @@ struct Cli {
     #[clap(long, short)]
     extensions_path: Option<PathBuf>,
 
-    #[clap(long, default_value = "127.0.0.1:8080", env = "SQLD_HTTP_LISTEN_ADDR")]
+    #[clap(long, default_value = "0.0.0.0:3000", env = "SQLD_HTTP_LISTEN_ADDR")]
     http_listen_addr: SocketAddr,
 
     /// Enable a web-based http console served at the /console route.
     #[clap(long)]
     enable_http_console: bool,
 
-    /// Address and port for the legacy, Web-Socket-only Hrana server.
-    #[clap(long, short = 'l', env = "SQLD_HRANA_LISTEN_ADDR")]
-    hrana_listen_addr: Option<SocketAddr>,
-
-    /// The address and port for the admin HTTP API.
-    #[clap(long, env = "SQLD_ADMIN_LISTEN_ADDR")]
-    admin_listen_addr: Option<SocketAddr>,
-
-    /// Path to a file with a JWT decoding key used to authenticate clients in the Hrana and HTTP
-    /// APIs. The key is either a PKCS#8-encoded Ed25519 public key in PEM, or just plain bytes of
-    /// the Ed25519 public key in URL-safe base64.
-    ///
-    /// It is possible to provide multiple JWT decoding keys in a single file by concatenating them
-    /// together. All decoding keys will be tried when parsing incoming JWT's.
-    ///
-    /// You can also pass the key directly in the env variable SQLD_AUTH_JWT_KEY.
-    #[clap(long, env = "SQLD_AUTH_JWT_KEY_FILE")]
-    auth_jwt_key_file: Option<PathBuf>,
-    /// Specifies legacy HTTP basic authentication. The argument must be in format "basic:$PARAM",
-    /// where $PARAM is base64-encoded string "$USERNAME:$PASSWORD".
-    #[clap(long, env = "SQLD_HTTP_AUTH")]
-    http_auth: Option<String>,
     /// URL that points to the HTTP API of this server. If set, this is used to implement "sticky
     /// sessions" in Hrana over HTTP.
     #[clap(long, env = "SQLD_HTTP_SELF_URL")]
@@ -183,14 +160,14 @@ struct Cli {
     #[clap(long, env = "SQLD_CHECKPOINT_INTERVAL_S")]
     checkpoint_interval_s: Option<u64>,
 
-    /// By default, all request for which a namespace can't be determined fallback to the default
-    /// namespace `default`. This flag disables that.
-    #[clap(long)]
+    /// By default, all requests for which a namespace can't be determined fall back to the
+    /// default namespace `default`. This flag disables that (enabled by default).
+    #[clap(long, default_value_t = true)]
     disable_default_namespace: bool,
 
-    /// Enable the namespaces features. Namespaces are disabled by default, and all requests target
-    /// the default namespace.
-    #[clap(long)]
+    /// Enable the namespaces features. Namespaces are enabled by default, and requests are
+    /// routed by the JWT namespace claims.
+    #[clap(long, default_value_t = true)]
     enable_namespaces: bool,
 
     /// Enable snapshot at shutdown
@@ -281,9 +258,6 @@ struct Cli {
     #[clap(long)]
     enable_deadlock_monitor: bool,
 
-    /// Auth key for the admin API
-    #[clap(long, env = "LIBSQL_ADMIN_AUTH_KEY", requires = "admin_listen_addr")]
-    admin_auth_key: Option<String>,
 
     /// Whether to perform a sync of all namespaces with remote on startup
     #[clap(
@@ -306,9 +280,6 @@ struct Cli {
     )]
     sync_conccurency: usize,
 
-    /// Disable prometheus metrics collection
-    #[clap(long, env = "LIBSQL_DISABLE_METRICS")]
-    disable_metrics: bool,
 
     #[clap(subcommand)]
     subcommand: Option<UtilsSubcommands>,
@@ -422,43 +393,7 @@ fn make_db_config(config: &Cli) -> anyhow::Result<DbConfig> {
     })
 }
 
-async fn make_user_auth_strategy(config: &Cli) -> anyhow::Result<Auth> {
-    if let Some(http_auth) = config.http_auth.as_deref() {
-        tracing::info!("Using legacy HTTP basic authentication");
-
-        let credential =
-            parse_http_basic_auth_arg(http_auth)?.expect("Invalid HTTP Basic configuration");
-
-        return Ok(Auth::new(user_auth_strategies::HttpBasic::new(
-            credential.into(),
-        )));
-    }
-
-    let auth_jwt_keys = if let Some(ref file_path) = config.auth_jwt_key_file {
-        let data = tokio::fs::read_to_string(file_path)
-            .await
-            .context("Could not read file with JWT key(s)")?;
-        Some(data)
-    } else {
-        match env::var("SQLD_AUTH_JWT_KEY") {
-            Ok(keys) => Some(keys),
-            Err(env::VarError::NotPresent) => None,
-            Err(env::VarError::NotUnicode(_)) => {
-                bail!("Env variable SQLD_AUTH_JWT_KEY does not contain a valid Unicode value")
-            }
-        }
-    };
-
-    if let Some(jwt_keys) = auth_jwt_keys.as_deref() {
-        let jwt_keys: Vec<jsonwebtoken::DecodingKey> =
-            parse_jwt_keys(jwt_keys).context("Could not parse JWT decoding key(s)")?;
-        tracing::info!("Using JWT-based authentication");
-        return Ok(Auth::new(user_auth_strategies::Jwt::new(jwt_keys)));
-    }
-
-    Ok(Auth::new(user_auth_strategies::Disabled::new()))
-}
-
+/// Build the HS256 verification key from --auth-jwt-secret.
 async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
     let http_acceptor =
         AddrIncoming::new(tokio::net::TcpListener::bind(config.http_listen_addr).await?);
@@ -467,53 +402,21 @@ async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
         config.http_listen_addr
     );
 
-    let hrana_ws_acceptor = match config.hrana_listen_addr {
-        Some(addr) => {
-            let incoming = AddrIncoming::new(tokio::net::TcpListener::bind(addr).await?);
-
-            tracing::info!(
-                "listening for incoming user hrana websocket connection on {}",
-                addr
-            );
-
-            Some(incoming)
-        }
-        None => None,
-    };
-
-    let auth_strategy = make_user_auth_strategy(&config).await?;
-
     Ok(UserApiConfig {
         http_acceptor: Some(http_acceptor),
-        hrana_ws_acceptor,
         enable_http_console: config.enable_http_console,
         self_url: config.http_self_url.clone(),
         primary_url: config.http_primary_url.clone(),
-        auth_strategy,
     })
 }
 
-async fn make_admin_api_config(config: &Cli) -> anyhow::Result<Option<AdminApiConfig>> {
-    match config.admin_listen_addr {
-        Some(addr) => {
-            let acceptor = AddrIncoming::new(tokio::net::TcpListener::bind(addr).await?);
-
-            tracing::info!("listening for incoming adming HTTP connection on {}", addr);
-            let connector = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .https_or_http()
-                .enable_http1()
-                .build();
-
-            Ok(Some(AdminApiConfig {
-                acceptor,
-                connector,
-                disable_metrics: config.disable_metrics,
-                auth_key: config.admin_auth_key.clone(),
-            }))
-        }
-        None => Ok(None),
-    }
+/// The admin API key protecting the namespace management routes
+/// (`/v1/namespaces/*`). When unset, the routes are disabled.
+fn make_admin_api_key() -> Option<String> {
+    Some(
+        std::env::var("ADMIN_KEY")
+            .unwrap_or_else(|_| "admin-key-change-me".to_string()),
+    )
 }
 
 async fn make_rpc_server_config(config: &Cli) -> anyhow::Result<Option<RpcServerConfig>> {
@@ -659,15 +562,16 @@ async fn build_server(
 ) -> anyhow::Result<Server> {
     let db_config = make_db_config(config)?;
     let user_api_config = make_user_api_config(config).await?;
-    let admin_api_config = make_admin_api_config(config).await?;
     let rpc_server_config = make_rpc_server_config(config).await?;
     let rpc_client_config = make_rpc_client_config(config).await?;
     let heartbeat_config = make_hearbeat_config(config);
     let meta_store_config = make_meta_store_config(config)?;
 
     let shutdown = Arc::new(Notify::new());
+    let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
     tokio::spawn({
         let shutdown = shutdown.clone();
+        let shutting_down = shutting_down.clone();
         async move {
             loop {
                 let signal = shutdown_signal()
@@ -678,6 +582,12 @@ async fn build_server(
                     "Got {} shutdown signal, gracefully shutting down...this may take some time",
                     signal
                 );
+
+                // first signal: graceful shutdown; any further signal: force exit
+                if shutting_down.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    tracing::error!("second shutdown signal received, forcefully exiting");
+                    std::process::exit(1);
+                }
 
                 shutdown.notify_waiters();
             }
@@ -698,7 +608,6 @@ async fn build_server(
         path: config.db_path.clone().into(),
         db_config,
         user_api_config,
-        admin_api_config,
         rpc_server_config,
         rpc_client_config,
         heartbeat_config,
@@ -724,6 +633,7 @@ async fn build_server(
         force_load_wals: config.force_load_wals,
         sync_conccurency: config.sync_conccurency,
         set_log_level: Some(Box::new(set_log_level)),
+        admin_api_key: make_admin_api_key(),
     })
 }
 

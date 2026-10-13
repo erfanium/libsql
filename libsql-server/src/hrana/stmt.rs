@@ -3,13 +3,13 @@ use metrics::counter;
 use std::collections::HashMap;
 
 use super::result_builder::SingleStatementBuilder;
+use super::stmt_cache;
 use super::{proto, ProtocolError, Version};
 use crate::connection::program::DescribeResponse;
 use crate::connection::{Connection, RequestContext};
 use crate::error::Error as SqldError;
 use crate::hrana;
 use crate::query::{Params, Query, Value};
-use crate::query_analysis::Statement;
 use crate::query_result_builder::{QueryResultBuilder, QueryResultBuilderError};
 use crate::replication::FrameNo;
 
@@ -89,16 +89,7 @@ pub fn proto_stmt_to_query(
 ) -> Result<Query> {
     let sql = proto_sql_to_sql(proto_stmt.sql.as_deref(), proto_stmt.sql_id, sqls, version)?;
 
-    let mut stmt_iter = Statement::parse(sql);
-    let stmt = match stmt_iter.next() {
-        Some(Ok(stmt)) => stmt,
-        Some(Err(err)) => bail!(StmtError::SqlParse { source: err }),
-        None => bail!(StmtError::SqlNoStmt),
-    };
-
-    if stmt_iter.next().is_some() {
-        bail!(StmtError::SqlManyStmts)
-    }
+    let stmt = stmt_cache::parse_cached(sql)?;
 
     let params = if proto_stmt.named_args.is_empty() {
         let values = proto_stmt

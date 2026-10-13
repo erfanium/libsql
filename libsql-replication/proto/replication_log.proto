@@ -43,6 +43,39 @@ message Frames {
     repeated Frame frames = 1;
 }
 
+// What the replica holds once it committed the frames: the parameters of its next sync
+message SyncTrailer {
+    string log_id = 1;
+    uint64 next_offset = 2;
+}
+
+// The response could not be completed: what was received of it is discarded
+message SyncError {
+    string message = 1;
+}
+
+// The body of the response to `GET /sync?next_offset=..&log_id=..` is a stream of these, each
+// one length-delimited (a varint of its size before it): the frames that bring the replica to
+// the primary's current index, then the trailer. A response without it is incomplete. The
+// frames form a single transaction and are applied in the order received: a later frame
+// replaces the page of an earlier one, and the last one is a commit frame. A failure once the
+// response is started is an error in place of the next message. A replica skips the messages
+// it does not know.
+//
+// About how many frames follow is in the `x-sync-estimated-frames` header of the response:
+// only good for showing progress.
+//
+// A replica that sends no log_id is cloned: the frames start from frame 0 and go into an empty
+// database. A log_id that is not the primary's, or a next_offset past the end of its log, is
+// not answered with frames but refused with a 409 LOG_MISMATCH.
+message SyncResponse {
+    oneof message {
+        bytes frame = 1;
+        SyncTrailer trailer = 2;
+        SyncError error = 3;
+    }
+}
+
 service ReplicationLog {
     rpc Hello(HelloRequest) returns (HelloResponse) {}
     rpc LogEntries(LogOffset) returns (stream Frame) {}

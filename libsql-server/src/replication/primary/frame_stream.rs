@@ -7,6 +7,8 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, Stream};
 use libsql_replication::frame::{Frame, FrameNo};
 
+use crate::namespace::NamespaceName;
+use crate::query_registry;
 use crate::replication::{LogReadError, ReplicationLogger};
 use crate::stats::Stats;
 use crate::BLOCKING_RT;
@@ -28,6 +30,8 @@ pub struct FrameStream {
     /// whether a stream is in-between transactions (last frame ended a transaction)
     transaction_boundary: bool,
     stats: Option<Arc<Stats>>,
+    /// namespace served by this stream, reported in the process list
+    namespace: Option<NamespaceName>,
 }
 
 impl FrameStream {
@@ -37,6 +41,24 @@ impl FrameStream {
         wait_for_more: bool,
         max_frames: Option<usize>,
         stats: Option<Arc<Stats>>,
+    ) -> crate::Result<Self> {
+        Self::new_with_namespace(
+            logger,
+            current_frameno,
+            wait_for_more,
+            max_frames,
+            stats,
+            None,
+        )
+    }
+
+    pub fn new_with_namespace(
+        logger: Arc<ReplicationLogger>,
+        current_frameno: FrameNo,
+        wait_for_more: bool,
+        max_frames: Option<usize>,
+        stats: Option<Arc<Stats>>,
+        namespace: Option<NamespaceName>,
     ) -> crate::Result<Self> {
         let max_available_frame_no = *logger.new_frame_notifier.subscribe().borrow();
         let mut sub = logger.closed_signal.subscribe();
@@ -55,6 +77,7 @@ impl FrameStream {
             logger_closed_fut,
             transaction_boundary: false,
             stats,
+            namespace,
         })
     }
 
@@ -78,9 +101,22 @@ impl FrameStream {
 
         let next_frameno = self.current_frame_no;
         let logger = self.logger.clone();
+        let namespace = self.namespace.clone();
+        let key = std::ptr::from_ref(self) as usize;
         let fut = async move {
             let res = BLOCKING_RT
-                .spawn_blocking(move || logger.get_frame(next_frameno))
+                .spawn_blocking(move || {
+                    // Report the frame read in the process list, on the
+                    // blocking thread that performs the read.
+                    let _guard = namespace.as_ref().map(|ns| {
+                        query_registry::register_job(
+                            key,
+                            ns.clone(),
+                            format!("sync frames: frame {next_frameno}"),
+                        )
+                    });
+                    logger.get_frame(next_frameno)
+                })
                 .await;
             match res {
                 Ok(Ok(frame)) => Ok(frame),

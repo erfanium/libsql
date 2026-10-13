@@ -1,8 +1,11 @@
+#[cfg(feature = "network")]
 use std::future::Future;
 
+#[cfg(feature = "network")]
 use super::rpc::replication::Frame as RpcFrame;
 pub use sqlite_injector::SqliteInjector;
 
+#[cfg(feature = "network")]
 use crate::frame::FrameNo;
 
 pub use error::Error;
@@ -11,6 +14,7 @@ use error::Result;
 mod error;
 mod sqlite_injector;
 
+#[cfg(feature = "network")]
 pub trait Injector {
     /// Inject a singular frame.
     fn inject_frame(

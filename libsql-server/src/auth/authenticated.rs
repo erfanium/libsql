@@ -13,14 +13,7 @@ use super::Permission;
 pub enum Authenticated {
     Anonymous,
     Authorized(Arc<Authorized>),
-    Legacy(LegacyAuth),
     FullAccess,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-pub struct LegacyAuth {
-    pub(crate) namespace: Option<NamespaceName>,
-    pub(crate) perm: Permission,
 }
 
 impl Authenticated {
@@ -55,9 +48,6 @@ impl Authenticated {
                 auth.has_right(Scope::Namespace(namespace.clone()), Permission::Read)
             }
             Authenticated::FullAccess => true,
-            Authenticated::Legacy(auth) => {
-                auth.namespace.is_none() || auth.namespace.iter().any(|ns| ns == namespace)
-            }
         }
     }
 
@@ -79,15 +69,6 @@ impl Authenticated {
                 }
             }
             Authenticated::FullAccess => Ok(()),
-            Authenticated::Legacy(auth) => {
-                if self.is_namespace_authorized(namespace) && Permission::has_right(auth.perm, perm)
-                {
-                    Ok(())
-                } else {
-                    Err(crate::Error::Forbidden(format!(
-                                "Current session doesn't not have {perm:?} permission to namespace {namespace}")))
-                }
-            }
         }
     }
 

@@ -41,6 +41,44 @@ async fn test_sync_context_push_frame() {
 }
 
 #[tokio::test]
+async fn test_push_disabled_by_env_var() {
+    std::env::set_var(DISABLE_PUSH_ENV, "1");
+
+    let server = MockServer::start();
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    gen_metadata_file(&db_path, 3278479626, 0, 0, 1);
+
+    let mut sync_ctx = SyncContext::new(
+        server.connector(),
+        db_path.to_str().unwrap().to_string(),
+        server.url(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // minimize the window where the env var affects other tests running in parallel
+    std::env::remove_var(DISABLE_PUSH_ENV);
+
+    assert!(!sync_ctx.push_enabled);
+
+    let db = crate::local::Database::open(db_path.to_str().unwrap(), Default::default()).unwrap();
+    let conn = db.connect().unwrap();
+
+    let err = try_push(&mut sync_ctx, &conn).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Sync(e)
+            if e.downcast_ref::<SyncError>().is_some_and(|e| matches!(e, SyncError::PushDisabled))
+    ));
+
+    // No frames should have been pushed to the server.
+    assert_eq!(server.frame_count(), 0);
+}
+
+#[tokio::test]
 async fn test_sync_context_with_auth() {
     let server = MockServer::start();
     let temp_dir = tempdir().unwrap();
