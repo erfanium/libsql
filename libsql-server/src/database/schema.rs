@@ -49,7 +49,7 @@ impl<C: crate::connection::Connection> crate::connection::Connection for SchemaC
 
             res
         } else {
-            check_program_auth(&ctx, &migration, &self.config.get()).await?;
+            check_program_auth(&ctx, &migration).await?;
             let connection = self.connection.clone();
             let disable_foreign_key = validate_migration(&mut migration)?;
             let migration = Arc::new(migration);

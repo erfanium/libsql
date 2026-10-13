@@ -21,7 +21,7 @@ fn replicated_config() {
         let client = Client::new();
 
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await
             .unwrap();
 
@@ -29,7 +29,7 @@ fn replicated_config() {
         // to create.
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": true,
                     "block_writes": false,
@@ -81,7 +81,7 @@ fn meta_store() {
         // STEP 1: create namespace and check that it can be read from
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({
                     "max_db_size": "5mb"
                 }),
@@ -102,7 +102,7 @@ fn meta_store() {
         // STEP 2: update namespace config to block reads
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": true,
                     "block_writes": false,
@@ -124,7 +124,7 @@ fn meta_store() {
         // STEP 3: update config again to un-block reads
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": false,
                     "block_writes": false,
@@ -163,7 +163,7 @@ fn meta_attach() {
         // STEP 1: create namespace and check that it can be read from
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({
                     "max_db_size": "5mb"
                 }),
@@ -196,7 +196,7 @@ fn meta_attach() {
         // STEP 3: update config to allow attaching databases
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": false,
                     "block_writes": false,
@@ -240,7 +240,7 @@ fn meta_attach_shared_schema() {
         // shared schema and check that it can be read from
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({
                     "shared_schema": true
                 }),
@@ -249,7 +249,7 @@ fn meta_attach_shared_schema() {
 
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({
                     "shared_schema_name": "schema"
                 }),
@@ -259,7 +259,7 @@ fn meta_attach_shared_schema() {
         // STEP 3: update config to allow attaching databases
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": false,
                     "block_writes": false,
@@ -303,7 +303,7 @@ fn meta_config_update() {
         // shared schema and check that it can be read from
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({
                     "max_db_size": "5mb"
                 }),
@@ -313,7 +313,7 @@ fn meta_config_update() {
         // STEP 3: update config to allow attaching databases
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": false,
                     "block_writes": false,
@@ -324,7 +324,7 @@ fn meta_config_update() {
         // STEP 4: update config again
         client
             .post(
-                "http://primary:9090/v1/namespaces/foo/config",
+                "http://primary:8080/v1/namespaces/foo/config",
                 json!({
                     "block_reads": false,
                     "block_writes": true,

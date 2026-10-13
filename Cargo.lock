@@ -1692,12 +1692,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "data-encoding"
-version = "2.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8566979429cf69b49a5c740c60791108e86440e8be149bbea4fe54d2c32d6e2"
-
-[[package]]
 name = "debugid"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1734,19 +1728,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.87",
-]
-
-[[package]]
-name = "dialoguer"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "658bce805d770f407bc62102fca7c2c64ceef2fbcb2b8bd19d2765ce093980de"
-dependencies = [
- "console",
- "shell-words",
- "tempfile",
- "thiserror",
- "zeroize",
 ]
 
 [[package]]
@@ -2203,10 +2184,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4567c8db10ae91089c99af84c68c38da3ec2f087c3f82960bcdbf3656b6f4d7"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2572,19 +2551,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyper-tungstenite"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc7dcb1ab67cd336f468a12491765672e61a3b6b148634dbfe2fe8acd3fe7d9"
-dependencies = [
- "hyper",
- "pin-project-lite",
- "tokio",
- "tokio-tungstenite",
- "tungstenite",
-]
-
-[[package]]
 name = "iana-time-zone"
 version = "0.1.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2642,6 +2608,7 @@ checksum = "168fb715dda47215e360912c096649d23d58bf392ac62f73919e831745e40f26"
 dependencies = [
  "equivalent",
  "hashbrown 0.14.5",
+ "serde",
 ]
 
 [[package]]
@@ -2827,21 +2794,6 @@ checksum = "b011eec8cc36da2aab2d5cff675ec18454fad408585853910a202391cf9f8e65"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "jsonwebtoken"
-version = "9.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9ae10193d25051e74945f1ea2d0b42e03cc3b890f7e4cc5faa44997d808193f"
-dependencies = [
- "base64 0.21.7",
- "js-sys",
- "pem",
- "ring",
- "serde",
- "serde_json",
- "simple_asn1",
 ]
 
 [[package]]
@@ -3038,7 +2990,6 @@ dependencies = [
  "console-subscriber",
  "crc",
  "crossbeam",
- "dialoguer",
  "enclose",
  "env_logger",
  "fallible-iterator 0.3.0",
@@ -3050,11 +3001,9 @@ dependencies = [
  "http-body 0.4.6",
  "hyper",
  "hyper-rustls 0.24.1",
- "hyper-tungstenite",
  "indicatif",
  "insta",
  "itertools 0.10.5",
- "jsonwebtoken",
  "libsql",
  "libsql-client",
  "libsql-hrana",
@@ -3076,7 +3025,6 @@ dependencies = [
  "priority-queue",
  "proptest",
  "prost",
- "prost-build",
  "rand",
  "regex",
  "reqwest",
@@ -3096,10 +3044,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite",
  "tokio-util",
  "tonic 0.11.0",
- "tonic-build",
  "tonic-web",
  "tower",
  "tower-http 0.3.5",
@@ -3107,6 +3053,7 @@ dependencies = [
  "tracing-subscriber",
  "turmoil",
  "url",
+ "utoipa",
  "uuid",
  "vergen",
  "zerocopy",
@@ -3502,16 +3449,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04dcd9cfa92246a9c7ca0671e00733c4e9d77ee1fa0ae08c9a181b7c8802aea2"
 dependencies = [
  "simdutf8",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
-dependencies = [
- "num-integer",
- "num-traits",
 ]
 
 [[package]]
@@ -4830,12 +4767,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shell-words"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24188a676b6ae68c3b2cb3a01be17fbf7240ce009799bb56d5b1409051e78fde"
-
-[[package]]
 name = "shellexpand"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4886,18 +4817,6 @@ name = "similar"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa42c91313f1d05da9b26f267f931cf178d4aba455b4c4622dd7355eb80c6640"
-
-[[package]]
-name = "simple_asn1"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adc4e5204eb1910f40f9cfa375f6f05b68c3abac4b6fd879c8ff5e7ae8a0a085"
-dependencies = [
- "num-bigint",
- "num-traits",
- "thiserror",
- "time",
-]
 
 [[package]]
 name = "siphasher"
@@ -5328,18 +5247,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-tungstenite"
-version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "212d5dcb2a1ce06d81107c3d0ffa3121fe974b73f068c8282cb1c32328113b6c"
-dependencies = [
- "futures-util",
- "log",
- "tokio",
- "tungstenite",
-]
-
-[[package]]
 name = "tokio-util"
 version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5619,25 +5526,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
-name = "tungstenite"
-version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e3dac10fd62eaf6617d3a904ae222845979aec67c615d1c842b4002c7666fb9"
-dependencies = [
- "byteorder",
- "bytes",
- "data-encoding",
- "http 0.2.12",
- "httparse",
- "log",
- "rand",
- "sha1",
- "thiserror",
- "url",
- "utf-8",
-]
-
-[[package]]
 name = "turmoil"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5745,16 +5633,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
-name = "utf-8"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
-
-[[package]]
 name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "utoipa"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bde15df68e80b16c7d16b9616e80770ad158988daa56a27dccd1e55558b0160"
+dependencies = [
+ "indexmap 2.2.6",
+ "serde",
+ "serde_json",
+ "utoipa-gen",
+]
+
+[[package]]
+name = "utoipa-gen"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ba0b99ee52df3028635d93840c797102da61f8a7bb3cf751032455895b52ef8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.87",
+]
 
 [[package]]
 name = "uuid"

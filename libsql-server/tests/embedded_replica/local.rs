@@ -26,7 +26,7 @@ fn local_sync_with_writes() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         println!("{:?}", tmp_host_path);

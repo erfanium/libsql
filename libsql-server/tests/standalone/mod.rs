@@ -1,7 +1,7 @@
 //! Tests for standalone primary configuration
 #![allow(deprecated)]
 
-use crate::common::net::{SimServer, TurmoilAcceptor};
+use crate::common::net::SimServer;
 use crate::common::{http::Client, snapshot_metrics};
 
 use super::common;
@@ -19,7 +19,7 @@ use common::net::{init_tracing, TestServer, TurmoilConnector};
 
 mod admin;
 mod attach;
-mod auth;
+mod sync;
 
 async fn make_standalone_server() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
@@ -27,14 +27,12 @@ async fn make_standalone_server() -> Result<(), Box<dyn std::error::Error>> {
     let server = TestServer {
         path: tmp.path().to_owned().into(),
         user_api_config: UserApiConfig {
-            hrana_ws_acceptor: None,
             ..Default::default()
         },
         admin_api_config: Some(AdminApiConfig {
-            acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
             connector: TurmoilConnector,
             disable_metrics: true,
-            auth_key: None,
+            auth_key: crate::common::ADMIN_KEY.into(),
         }),
         disable_namespaces: false,
         ..Default::default()
@@ -350,14 +348,12 @@ fn dirty_startup_dont_prevent_namespace_creation() {
         let server = TestServer {
             path: tmp.path().to_owned().into(),
             user_api_config: UserApiConfig {
-                hrana_ws_acceptor: None,
                 ..Default::default()
             },
             admin_api_config: Some(AdminApiConfig {
-                acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                 connector: TurmoilConnector,
                 disable_metrics: true,
-                auth_key: None,
+                auth_key: crate::common::ADMIN_KEY.into(),
             }),
             disable_default_namespace: true,
             disable_namespaces: false,
@@ -376,7 +372,7 @@ fn dirty_startup_dont_prevent_namespace_creation() {
         let client = Client::new();
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/test/create",
+                "http://primary:8080/v1/namespaces/test/create",
                 serde_json::json!({}),
             )
             .await

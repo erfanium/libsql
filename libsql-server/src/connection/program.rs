@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 use metrics::{histogram, increment_counter};
 use rusqlite::StatementStatus;
 
-use crate::auth::Permission;
 use crate::error::Error;
 use crate::metrics::{READ_QUERY_COUNT, WRITE_QUERY_COUNT};
 use crate::namespace::{NamespaceName, ResolveNamespacePathFn};
@@ -12,7 +11,6 @@ use crate::query::Query;
 use crate::query_analysis::StmtKind;
 use crate::query_result_builder::QueryResultBuilder;
 
-use super::config::DatabaseConfig;
 use super::RequestContext;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
@@ -348,42 +346,19 @@ fn value_size(val: &rusqlite::types::ValueRef) -> usize {
     }
 }
 
-pub async fn check_program_auth(
-    ctx: &RequestContext,
-    pgm: &Program,
-    config: &DatabaseConfig,
-) -> crate::Result<()> {
+/// Statements run with full access to their namespace: sqld is only reachable through the
+/// backend, which authenticates the user. Attaching another namespace is the one thing that
+/// namespace has to allow.
+pub async fn check_program_auth(ctx: &RequestContext, pgm: &Program) -> crate::Result<()> {
     for step in pgm.steps() {
-        match &step.query.stmt.kind {
-            StmtKind::TxnBegin
-            | StmtKind::TxnEnd
-            | StmtKind::Read
-            | StmtKind::Savepoint
-            | StmtKind::Release => {
-                ctx.auth.has_right(&ctx.namespace, Permission::Read)?;
+        if let StmtKind::Attach(ref ns) = step.query.stmt.kind {
+            if !ctx.meta_store.handle(ns.clone()).await.get().allow_attach {
+                return Err(Error::Forbidden(format!(
+                    "Namespace `{ns}` doesn't allow attach"
+                )));
             }
-            StmtKind::DDL if config.shared_schema_name.is_some() => {
-                ctx.auth().ddl_permitted(&ctx.namespace)?;
-            }
-            StmtKind::DDL | StmtKind::Write => {
-                ctx.auth().has_right(&ctx.namespace, Permission::Write)?;
-            }
-            StmtKind::Attach(ref ns) => {
-                ctx.auth.has_right(ns, Permission::AttachRead)?;
-                if !ctx.meta_store.handle(ns.clone()).await.get().allow_attach {
-                    return Err(Error::Forbidden(format!(
-                        "Namespace `{ns}` doesn't allow attach"
-                    )));
-                }
-            }
-            StmtKind::Detach => (),
         }
     }
 
-    Ok(())
-}
-
-pub fn check_describe_auth(ctx: RequestContext) -> crate::Result<()> {
-    ctx.auth().has_right(ctx.namespace(), Permission::Read)?;
     Ok(())
 }

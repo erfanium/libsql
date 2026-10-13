@@ -4,10 +4,17 @@ This document describes the admin API endpoints.
 
 The admin API is used to manage namespaces on a `sqld` instance. Namespaces are isolated database within a same sqld instance.
 
-To enable the admin API, and manage namespaces, two extra flags need to be passed to `sqld`:
+The admin API is served on the port of the user API (`--http-listen-addr`). It is enabled by giving `sqld` a key, that every request to the admin API must carry as a bearer token:
 
-- `--admin-listen-addr <addr>:<port>`: the address and port on which the admin API should listen. It must be different from the user API listen address (which defaults to port 8080).
-- `--enable-namespaces`: enable namespaces for the instance. By default namespaces are disabled.
+- `--admin-key <key>` (or the `ADMIN_KEY` environment variable): the key of the admin API. Without it, there is no admin API.
+
+```console
+curl -X POST -H "Authorization: Bearer $ADMIN_KEY" -d '{}' http://localhost:8080/v1/namespaces/my-db/create
+```
+
+Namespaces are always enabled, and there is no default namespace: the requests to the user API name theirs in the `x-namespace` header.
+
+The description of the routes is generated from the code: it is served as an OpenAPI document at `/openapi.json`, and can be browsed at `/docs`.
 
 ## Routes
 

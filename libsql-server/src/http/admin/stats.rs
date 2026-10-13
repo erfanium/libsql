@@ -136,6 +136,15 @@ pub struct QueryAndStats {
     pub stat: QueryStats,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/namespaces/{namespace}/stats",
+    tag = "namespaces",
+    summary = "Usage and query statistics of a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    responses((status = 200, body = Object)),
+    security(("admin_key" = [])),
+)]
 pub(super) async fn handle_stats<C>(
     State(app_state): State<Arc<AppState<C>>>,
     Path(namespace): Path<String>,
@@ -149,6 +158,15 @@ pub(super) async fn handle_stats<C>(
     Ok(Json(resp))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/namespaces/{namespace}/stats/{stats_type}",
+    tag = "namespaces",
+    summary = "Reset the top or the slowest queries of a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace"), ("stats_type" = String, Path, description = "`top` or `slowest`")),
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 pub(super) async fn handle_delete_stats<C>(
     State(app_state): State<Arc<AppState<C>>>,
     Path((namespace, stats_type)): Path<(String, String)>,

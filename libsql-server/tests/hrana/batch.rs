@@ -5,60 +5,10 @@ use futures::StreamExt;
 use insta::{assert_json_snapshot, assert_snapshot};
 use libsql::{params, Database};
 use libsql_server::config::UserApiConfig;
-use libsql_server::hrana_proto::{Batch, BatchStep, Stmt};
 use tokio::sync::Notify;
 
 use crate::common::http::Client;
 use crate::common::net::{init_tracing, SimServer as _, TestServer, TurmoilConnector};
-
-#[test]
-fn sample_request() {
-    let mut sim = turmoil::Builder::new()
-        .simulation_duration(Duration::from_secs(1000))
-        .build();
-    sim.host("primary", super::make_standalone_server);
-    sim.client("client", async {
-        let batch = Batch {
-            steps: vec![BatchStep {
-                condition: None,
-                stmt: Stmt {
-                    sql: Some("create table test (x)".to_string()),
-                    ..Default::default()
-                },
-            }],
-            replication_index: None,
-        };
-        let client = Client::new();
-
-        let resp = client
-            .post(
-                "http://primary:8080/v1/batch",
-                serde_json::json!({ "batch": batch }),
-            )
-            .await
-            .unwrap();
-
-        let mut json = resp.json_value().await.unwrap();
-
-        for result in json["result"]["step_results"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-        {
-            result
-                .as_object_mut()
-                .unwrap()
-                .remove("query_duration_ms")
-                .expect("expected query_duration_ms");
-        }
-
-        assert_json_snapshot!(json);
-
-        Ok(())
-    });
-
-    sim.run().unwrap();
-}
 
 #[test]
 fn execute_individual_statements() {
@@ -549,7 +499,6 @@ where
             let make_server = || TestServer {
                 path: tmp.path().to_owned().into(),
                 user_api_config: UserApiConfig {
-                    hrana_ws_acceptor: None,
                     ..Default::default()
                 },
                 ..Default::default()

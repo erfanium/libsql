@@ -26,10 +26,9 @@ fn make_primary(sim: &mut Sim, path: PathBuf) {
                     ..Default::default()
                 },
                 admin_api_config: Some(AdminApiConfig {
-                    acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
                     connector: TurmoilConnector,
                     disable_metrics: true,
-                    auth_key: None,
+                    auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
                     acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await?,
@@ -58,7 +57,7 @@ fn fork_namespace() {
     sim.client("client", async {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let foo =
@@ -69,7 +68,7 @@ fn fork_namespace() {
         foo_conn.execute("insert into test values (42)", ()).await?;
 
         client
-            .post("http://primary:9090/v1/namespaces/foo/fork/bar", ())
+            .post("http://primary:8080/v1/namespaces/foo/fork/bar", ())
             .await?;
 
         let bar =
@@ -116,7 +115,7 @@ fn delete_namespace() {
     sim.client("client", async {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let foo =
@@ -125,7 +124,7 @@ fn delete_namespace() {
         foo_conn.execute("create table test (c)", ()).await?;
 
         client
-            .delete("http://primary:9090/v1/namespaces/foo", json!({}))
+            .delete("http://primary:8080/v1/namespaces/foo", json!({}))
             .await
             .unwrap();
         // namespace doesn't exist anymore

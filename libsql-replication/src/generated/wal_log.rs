@@ -92,6 +92,55 @@ pub struct Frames {
     #[prost(message, repeated, tag = "1")]
     pub frames: ::prost::alloc::vec::Vec<Frame>,
 }
+/// What the replica holds once it committed the frames: the parameters of its next sync
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SyncTrailer {
+    #[prost(string, tag = "1")]
+    pub log_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub next_offset: u64,
+}
+/// The response could not be completed: what was received of it is discarded
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SyncError {
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+}
+/// The body of the response to `GET /sync?next_offset=..&log_id=..` is a stream of these, each
+/// one length-delimited (a varint of its size before it): the frames that bring the replica to
+/// the primary's current index, then the trailer. A response without it is incomplete. The
+/// frames form a single transaction and are applied in the order received: a later frame
+/// replaces the page of an earlier one, and the last one is a commit frame. A failure once the
+/// response is started is an error in place of the next message. A replica skips the messages
+/// it does not know.
+///
+/// About how many frames follow is in the `x-sync-estimated-frames` header of the response:
+/// only good for showing progress.
+///
+/// A replica that sends no log_id is cloned: the frames start from frame 0 and go into an empty
+/// database. A log_id that is not the primary's, or a next_offset past the end of its log, is
+/// not answered with frames but refused with a 409 LOG_MISMATCH.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SyncResponse {
+    #[prost(oneof = "sync_response::Message", tags = "1, 2, 3")]
+    pub message: ::core::option::Option<sync_response::Message>,
+}
+/// Nested message and enum types in `SyncResponse`.
+pub mod sync_response {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Message {
+        #[prost(bytes, tag = "1")]
+        Frame(::prost::bytes::Bytes),
+        #[prost(message, tag = "2")]
+        Trailer(super::SyncTrailer),
+        #[prost(message, tag = "3")]
+        Error(super::SyncError),
+    }
+}
 /// Generated client implementations.
 pub mod replication_log_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]

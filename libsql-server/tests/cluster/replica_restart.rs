@@ -31,10 +31,9 @@ fn replica_restart() {
                     ..Default::default()
                 },
                 admin_api_config: Some(AdminApiConfig {
-                    acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
                     connector: TurmoilConnector,
                     disable_metrics: true,
-                    auth_key: None,
+                    auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
                     acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await?,
@@ -65,10 +64,9 @@ fn replica_restart() {
                             ..Default::default()
                         },
                         admin_api_config: Some(AdminApiConfig {
-                            acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                             connector: TurmoilConnector,
                             disable_metrics: true,
-                            auth_key: None,
+                            auth_key: crate::common::ADMIN_KEY.into(),
                         }),
                         rpc_client_config: Some(RpcClientConfig {
                             remote_url: "http://primary:4567".into(),
@@ -110,7 +108,7 @@ fn replica_restart() {
         }
 
         let primary_index = http
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -121,7 +119,7 @@ fn replica_restart() {
 
         loop {
             let replica_index = http
-                .get("http://primary:9090/v1/namespaces/default/stats")
+                .get("http://primary:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap()
                 .json_value()
@@ -140,7 +138,7 @@ fn replica_restart() {
         // make sure that replica is up to date
         loop {
             let replica_index = http
-                .get("http://primary:9090/v1/namespaces/default/stats")
+                .get("http://primary:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap()
                 .json_value()
@@ -186,10 +184,9 @@ fn primary_regenerate_log_no_replica_restart() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await.unwrap(),
@@ -241,10 +238,9 @@ fn primary_regenerate_log_no_replica_restart() {
                             ..Default::default()
                         },
                         admin_api_config: Some(AdminApiConfig {
-                            acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                             connector: TurmoilConnector,
                             disable_metrics: true,
-                            auth_key: None,
+                            auth_key: crate::common::ADMIN_KEY.into(),
                         }),
                         rpc_client_config: Some(RpcClientConfig {
                             remote_url: "http://primary:4567".into(),
@@ -277,7 +273,7 @@ fn primary_regenerate_log_no_replica_restart() {
         }
 
         let primary_index = http
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -288,7 +284,7 @@ fn primary_regenerate_log_no_replica_restart() {
 
         loop {
             let replica_index = http
-                .get("http://primary:9090/v1/namespaces/default/stats")
+                .get("http://primary:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap()
                 .json_value()
@@ -309,7 +305,7 @@ fn primary_regenerate_log_no_replica_restart() {
         let http = Client::new();
         // make sure that replica is up to date
         let new_primary_index = http
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -320,7 +316,7 @@ fn primary_regenerate_log_no_replica_restart() {
         assert_ne!(primary_index, new_primary_index);
         loop {
             let replica_index = http
-                .get("http://primary:9090/v1/namespaces/default/stats")
+                .get("http://primary:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap()
                 .json_value()
@@ -366,10 +362,9 @@ fn primary_regenerate_log_with_replica_restart() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await.unwrap(),
@@ -423,10 +418,9 @@ fn primary_regenerate_log_with_replica_restart() {
                             ..Default::default()
                         },
                         admin_api_config: Some(AdminApiConfig {
-                            acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                             connector: TurmoilConnector,
                             disable_metrics: true,
-                            auth_key: None,
+                            auth_key: crate::common::ADMIN_KEY.into(),
                         }),
                         rpc_client_config: Some(RpcClientConfig {
                             remote_url: "http://primary:4567".into(),
@@ -484,7 +478,7 @@ fn primary_regenerate_log_with_replica_restart() {
         }
 
         let primary_index = http
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -495,7 +489,7 @@ fn primary_regenerate_log_with_replica_restart() {
 
         loop {
             let replica_index = http
-                .get("http://primary:9090/v1/namespaces/default/stats")
+                .get("http://primary:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap()
                 .json_value()
@@ -516,7 +510,7 @@ fn primary_regenerate_log_with_replica_restart() {
         let http = Client::new();
         // make sure that replica is up to date
         let new_primary_index = http
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -527,7 +521,7 @@ fn primary_regenerate_log_with_replica_restart() {
         assert_ne!(primary_index, new_primary_index);
         loop {
             let replica_index = http
-                .get("http://primary:9090/v1/namespaces/default/stats")
+                .get("http://primary:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap()
                 .json_value()

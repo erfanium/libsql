@@ -1,9 +1,16 @@
 use axum::http::HeaderName;
 use bytes::Bytes;
+use hyper::header::AUTHORIZATION;
 use hyper::Body;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::net::TurmoilConnector;
+use super::ADMIN_KEY;
+
+/// The admin API is on the port of the user API, which ignores the header.
+fn admin_auth() -> String {
+    format!("Bearer {ADMIN_KEY}")
+}
 
 /// An hyper client that resolves URI within a turmoil simulation.
 pub struct Client(hyper::Client<TurmoilConnector>);
@@ -29,6 +36,14 @@ impl Response {
     pub fn status(&self) -> hyper::http::StatusCode {
         self.0.status()
     }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.0.headers().get(name)?.to_str().ok()
+    }
+
+    pub async fn body_bytes(self) -> anyhow::Result<Bytes> {
+        Ok(hyper::body::to_bytes(self.0.into_body()).await?)
+    }
 }
 
 impl Client {
@@ -38,7 +53,10 @@ impl Client {
     }
 
     pub async fn get(&self, s: &str) -> anyhow::Result<Response> {
-        Ok(Response(self.0.get(s.parse()?).await?))
+        let request = hyper::Request::get(s)
+            .header(AUTHORIZATION, admin_auth())
+            .body(Body::empty())?;
+        Ok(Response(self.0.request(request).await?))
     }
 
     pub(crate) async fn post<T: Serialize>(&self, url: &str, body: T) -> anyhow::Result<Response> {
@@ -55,6 +73,7 @@ impl Client {
         let body = Body::from(bytes);
         let mut request = hyper::Request::post(url)
             .header("Content-Type", "application/json")
+            .header(AUTHORIZATION, admin_auth())
             .body(body)?;
 
         for (key, val) in headers {
@@ -81,6 +100,7 @@ impl Client {
         let body = Body::from(bytes);
         let request = hyper::Request::delete(url)
             .header("Content-Type", "application/json")
+            .header(AUTHORIZATION, admin_auth())
             .body(body)?;
         let resp = self.0.request(request).await?;
 

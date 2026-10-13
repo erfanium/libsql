@@ -21,7 +21,7 @@ fn schema_migration_basics() {
 
         assert!(http
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({ "shared_schema": true })
             )
             .await
@@ -30,7 +30,7 @@ fn schema_migration_basics() {
             .is_success());
         assert!(http
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "shared_schema_name": "schema" })
             )
             .await
@@ -142,7 +142,7 @@ fn schema_migration_via_replica() {
 
         assert!(http
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({ "shared_schema": true })
             )
             .await
@@ -151,7 +151,7 @@ fn schema_migration_via_replica() {
             .is_success());
         assert!(http
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "shared_schema_name": "schema" })
             )
             .await

@@ -25,6 +25,8 @@ pub struct CursorHandle {
 #[derive(Debug)]
 pub struct SizedEntry {
     pub entry: proto::CursorEntry,
+    // only the WebSocket server, which is gone, limited what it buffered by size
+    #[allow(dead_code)]
     pub size: u64,
 }
 
@@ -61,10 +63,6 @@ impl CursorHandle {
             pgm,
             replication_index,
         });
-    }
-
-    pub async fn fetch(&mut self) -> Result<Option<SizedEntry>> {
-        self.entry_rx.recv().await.transpose()
     }
 
     pub fn poll_fetch(&mut self, cx: &mut task::Context) -> task::Poll<Option<Result<SizedEntry>>> {

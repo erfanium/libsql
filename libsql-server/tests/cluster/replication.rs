@@ -37,10 +37,9 @@ fn apply_partial_snapshot() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 5050)).await.unwrap(),
@@ -69,10 +68,9 @@ fn apply_partial_snapshot() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_client_config: Some(RpcClientConfig {
                         remote_url: "http://primary:5050".into(),
@@ -109,7 +107,7 @@ fn apply_partial_snapshot() {
 
         let client = Client::new();
         let resp = client
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap();
         let stats = resp.json_value().await.unwrap();
@@ -127,7 +125,7 @@ fn apply_partial_snapshot() {
 
         loop {
             let resp = client
-                .get("http://replica:9090/v1/namespaces/default/stats")
+                .get("http://replica:8080/v1/namespaces/default/stats")
                 .await
                 .unwrap();
             let stats = resp.json_value().await.unwrap();
@@ -166,10 +164,9 @@ fn replica_lazy_creation() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 5050)).await.unwrap(),
@@ -197,10 +194,9 @@ fn replica_lazy_creation() {
                     ..Default::default()
                 },
                 admin_api_config: Some(AdminApiConfig {
-                    acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                     connector: TurmoilConnector,
                     disable_metrics: true,
-                    auth_key: None,
+                    auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_client_config: Some(RpcClientConfig {
                     remote_url: "http://primary:5050".into(),
@@ -227,7 +223,7 @@ fn replica_lazy_creation() {
         let primary_http = Client::new();
         primary_http
             .post(
-                "http://primary:9090/v1/namespaces/test/create",
+                "http://primary:8080/v1/namespaces/test/create",
                 serde_json::json!({}),
             )
             .await

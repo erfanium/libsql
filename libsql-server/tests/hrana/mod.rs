@@ -14,7 +14,6 @@ async fn make_standalone_server() -> Result<(), Box<dyn std::error::Error>> {
     let server = TestServer {
         path: tmp.path().to_owned().into(),
         user_api_config: UserApiConfig {
-            hrana_ws_acceptor: None,
             ..Default::default()
         },
         ..Default::default()

@@ -113,8 +113,7 @@ curl -d '{"statements": ["SELECT * FROM users"]}' 127.0.0.1:8081
 
 ## Client Authentication
 
-You can configure client authentication by passing the `--auth-jwt-key-file FILENAME` command line option to `sqld`.
-The key is either a PKCS#8-encoded Ed25519 public key in PEM, or just plain bytes of the Ed25519 public key in URL-safe base64.
+`sqld` does not authenticate its clients: it must only be reachable by a backend that does. That backend names the namespace of every request it forwards in the `x-namespace` header, which takes precedence over what the client asked for.
 
 ## Deployment
 

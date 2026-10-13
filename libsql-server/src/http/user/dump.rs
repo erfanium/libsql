@@ -8,7 +8,6 @@ use hyper::HeaderMap;
 use pin_project_lite::pin_project;
 use serde::Deserialize;
 
-use crate::auth::Authenticated;
 use crate::connection::dump::exporter::export_dump;
 use crate::connection::Connection as _;
 use crate::error::Error;
@@ -79,7 +78,6 @@ pub struct DumpQuery {
 }
 
 pub(super) async fn handle_dump(
-    auth: Authenticated,
     AxumState(state): AxumState<AppState>,
     headers: HeaderMap,
     query: Query<DumpQuery>,
@@ -90,10 +88,6 @@ pub(super) async fn handle_dump(
         state.disable_default_namespace,
         state.disable_namespaces,
     )?;
-
-    if !auth.is_namespace_authorized(&namespace) {
-        return Err(Error::NamespaceDoesntExist(namespace.to_string()));
-    }
 
     let conn_maker = state
         .namespaces

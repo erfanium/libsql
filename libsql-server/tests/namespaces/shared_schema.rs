@@ -6,11 +6,7 @@ use tempfile::tempdir;
 use tokio::time::Duration;
 use turmoil::Builder;
 
-use crate::common::{
-    auth::{encode, key_pair},
-    http::Client,
-    net::TurmoilConnector,
-};
+use crate::common::{http::Client, net::TurmoilConnector};
 
 use super::make_primary;
 
@@ -84,18 +80,18 @@ fn perform_schema_migration() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
             .unwrap();
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns1/create",
+                "http://primary:8080/v1/namespaces/ns1/create",
                 json!({"shared_schema_name": "schema" }),) .await .unwrap();
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns2/create",
+                "http://primary:8080/v1/namespaces/ns2/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -139,7 +135,7 @@ fn perform_schema_migration() {
         // we add a new namespace and expect it to have the same schema version and schema
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns3/create",
+                "http://primary:8080/v1/namespaces/ns3/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -185,7 +181,7 @@ fn no_job_created_when_migration_job_is_invalid() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
@@ -228,7 +224,7 @@ fn dry_run_failure() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
@@ -236,14 +232,14 @@ fn dry_run_failure() {
 
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns1/create",
+                "http://primary:8080/v1/namespaces/ns1/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
             .unwrap();
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns2/create",
+                "http://primary:8080/v1/namespaces/ns2/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -332,21 +328,21 @@ fn perform_data_migration() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
             .unwrap();
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns1/create",
+                "http://primary:8080/v1/namespaces/ns1/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
             .unwrap();
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns2/create",
+                "http://primary:8080/v1/namespaces/ns2/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -395,7 +391,7 @@ fn perform_data_migration() {
         // new db added to the linked schema also should have the data
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns3/create",
+                "http://primary:8080/v1/namespaces/ns3/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -460,14 +456,14 @@ fn conflicting_data_migration() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
             .unwrap();
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns1/create",
+                "http://primary:8080/v1/namespaces/ns1/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -557,146 +553,6 @@ fn conflicting_data_migration() {
 }
 
 #[test]
-fn disable_ddl() {
-    let mut sim = Builder::new()
-        .simulation_duration(Duration::from_secs(100000))
-        .build();
-    let tmp = tempdir().unwrap();
-    make_primary(&mut sim, tmp.path().to_path_buf());
-
-    sim.client("client", async {
-        let (encoding_key, validation_key) = key_pair();
-        let client = Client::new();
-        client
-            .post(
-                "http://primary:9090/v1/namespaces/schema/create",
-                json!({"shared_schema": true, "jwt_key": validation_key.clone()}),
-            )
-            .await
-            .unwrap();
-        client
-            .post(
-                "http://primary:9090/v1/namespaces/ns1/create",
-                json!({"shared_schema_name": "schema", "jwt_key": validation_key.clone() }),
-            )
-            .await
-            .unwrap();
-
-        {
-            let claims = serde_json::json!( {
-                "p": {
-                    "rw": {
-                        "ns": ["schema", "ns1"],
-                    }
-                }
-            });
-            let token = encode(&claims, &encoding_key);
-            let conn = Database::open_remote_with_connector(
-                "http://ns1.primary:8080",
-                token.clone(),
-                TurmoilConnector,
-            )
-            .unwrap()
-            .connect()
-            .unwrap();
-
-            assert_debug_snapshot!(conn.execute("create table test (x)", ()).await.unwrap_err());
-        }
-
-        {
-            let claims = serde_json::json!( {
-                "p": {
-                    "ddl": {
-                        "ns": ["ns1"],
-                    }
-                }
-            });
-            let token = encode(&claims, &encoding_key);
-            let conn = Database::open_remote_with_connector(
-                "http://ns1.primary:8080",
-                token.clone(),
-                TurmoilConnector,
-            )
-            .unwrap()
-            .connect()
-            .unwrap();
-
-            assert_debug_snapshot!(conn.execute("create table test (x)", ()).await.unwrap());
-        }
-
-        Ok(())
-    });
-
-    sim.run().unwrap();
-}
-
-#[test]
-fn check_migration_perms() {
-    let mut sim = Builder::new()
-        .simulation_duration(Duration::from_secs(100000))
-        .build();
-    let tmp = tempdir().unwrap();
-    make_primary(&mut sim, tmp.path().to_path_buf());
-
-    sim.client("client", async {
-        let (encoding_key, validation_key) = key_pair();
-        let client = Client::new();
-        client
-            .post(
-                "http://primary:9090/v1/namespaces/schema/create",
-                json!({"shared_schema": true, "jwt_key": validation_key.clone()}),
-            )
-            .await
-            .unwrap();
-        {
-            let claims = serde_json::json!( {
-                "p": {
-                    "ro": {
-                        "ns": ["schema"],
-                    }
-                }
-            });
-            let token = encode(&claims, &encoding_key);
-            let conn = Database::open_remote_with_connector(
-                "http://schema.primary:8080",
-                token.clone(),
-                TurmoilConnector,
-            )
-            .unwrap()
-            .connect()
-            .unwrap();
-
-            assert_debug_snapshot!(conn.execute("create table test (x)", ()).await.unwrap_err());
-        }
-
-        {
-            let claims = serde_json::json!( {
-                "p": {
-                    "rw": {
-                        "ns": ["schema"],
-                    }
-                }
-            });
-            let token = encode(&claims, &encoding_key);
-            let conn = Database::open_remote_with_connector(
-                "http://schema.primary:8080",
-                token.clone(),
-                TurmoilConnector,
-            )
-            .unwrap()
-            .connect()
-            .unwrap();
-
-            assert_debug_snapshot!(conn.execute("create table test (x)", ()).await.unwrap());
-        }
-
-        Ok(())
-    });
-
-    sim.run().unwrap();
-}
-
-#[test]
 fn schema_deletion() {
     let mut sim = Builder::new()
         .simulation_duration(Duration::from_secs(100000))
@@ -708,7 +564,7 @@ fn schema_deletion() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
@@ -716,7 +572,7 @@ fn schema_deletion() {
 
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns1/create",
+                "http://primary:8080/v1/namespaces/ns1/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
@@ -724,54 +580,54 @@ fn schema_deletion() {
 
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns2/create",
+                "http://primary:8080/v1/namespaces/ns2/create",
                 json!({"shared_schema_name": "schema" }),
             )
             .await
             .unwrap();
 
         let resp = client
-            .delete("http://primary:9090/v1/namespaces/schema", json!({}))
+            .delete("http://primary:8080/v1/namespaces/schema", json!({}))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = client
-            .delete("http://primary:9090/v1/namespaces/ns1", json!({}))
+            .delete("http://primary:8080/v1/namespaces/ns1", json!({}))
             .await
             .unwrap();
         assert!(resp.status().is_success());
 
         let resp = client
-            .delete("http://primary:9090/v1/namespaces/schema", json!({}))
+            .delete("http://primary:8080/v1/namespaces/schema", json!({}))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = client
-            .delete("http://primary:9090/v1/namespaces/ns2", json!({}))
+            .delete("http://primary:8080/v1/namespaces/ns2", json!({}))
             .await
             .unwrap();
         assert!(resp.status().is_success());
 
         let resp = client
-            .delete("http://primary:9090/v1/namespaces/schema", json!({}))
+            .delete("http://primary:8080/v1/namespaces/schema", json!({}))
             .await
             .unwrap();
         assert!(resp.status().is_success());
 
         let resp = client
-            .get("http://primary:9090/v1/namespaces/schema/config")
+            .get("http://primary:8080/v1/namespaces/schema/config")
             .await
             .unwrap();
         assert_debug_snapshot!(resp.body_string().await.unwrap());
         let resp = client
-            .get("http://primary:9090/v1/namespaces/ns1/config")
+            .get("http://primary:8080/v1/namespaces/ns1/config")
             .await
             .unwrap();
         assert_debug_snapshot!(resp.body_string().await.unwrap());
         let resp = client
-            .get("http://primary:9090/v1/namespaces/ns2/config")
+            .get("http://primary:8080/v1/namespaces/ns2/config")
             .await
             .unwrap();
         assert_debug_snapshot!(resp.body_string().await.unwrap());
@@ -794,7 +650,7 @@ fn attach_in_migration_is_forbidden() {
         let client = Client::new();
         client
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({"shared_schema": true }),
             )
             .await
@@ -802,7 +658,7 @@ fn attach_in_migration_is_forbidden() {
 
         client
             .post(
-                "http://primary:9090/v1/namespaces/ns/create",
+                "http://primary:8080/v1/namespaces/ns/create",
                 json!({"allow_attach": true }),
             )
             .await

@@ -9,9 +9,11 @@ use metrics_util::{
     CompositeKey, MetricKind,
 };
 
-pub mod auth;
 pub mod http;
 pub mod net;
+
+/// The key of the admin API of the test servers: what `http::Client` sends with every request.
+pub const ADMIN_KEY: &str = "test-admin-key";
 
 pub fn print_metrics() {
     let snapshot = MetricsSnapshot::current();

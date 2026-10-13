@@ -31,10 +31,9 @@ pub fn make_cluster(sim: &mut Sim, num_replica: usize, disable_namespaces: bool)
                     ..Default::default()
                 },
                 admin_api_config: Some(AdminApiConfig {
-                    acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
                     connector: TurmoilConnector,
                     disable_metrics: true,
-                    auth_key: None,
+                    auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
                     acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await?,
@@ -62,10 +61,9 @@ pub fn make_cluster(sim: &mut Sim, num_replica: usize, disable_namespaces: bool)
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_client_config: Some(RpcClientConfig {
                         remote_url: "http://primary:4567".into(),
@@ -177,7 +175,7 @@ fn sync_many_replica() {
         }
 
         let primary_fno = loop {
-            if let Some(fno) = get_frame_no("http://primary:9090/v1/namespaces/default/stats").await
+            if let Some(fno) = get_frame_no("http://primary:8080/v1/namespaces/default/stats").await
             {
                 break fno;
             }
@@ -187,7 +185,7 @@ fn sync_many_replica() {
         let mut join_set = JoinSet::new();
         for i in 0..NUM_REPLICA {
             join_set.spawn(async move {
-                let uri = format!("http://replica{i}:9090/v1/namespaces/default/stats");
+                let uri = format!("http://replica{i}:8080/v1/namespaces/default/stats");
                 loop {
                     if let Some(replica_fno) = get_frame_no(&uri).await {
                         if replica_fno == primary_fno {
@@ -218,7 +216,7 @@ fn sync_many_replica() {
         let client = Client::new();
 
         let stats = client
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await?
             .json_value()
             .await
@@ -258,7 +256,7 @@ fn create_namespace() {
         let client = Client::new();
         let resp = client
             .post(
-                "http://foo.primary:9090/v1/namespaces/foo/create",
+                "http://foo.primary:8080/v1/namespaces/foo/create",
                 json!({}),
             )
             .await?;

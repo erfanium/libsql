@@ -1,9 +1,9 @@
 pub mod db_factory;
 mod dump;
 mod extract;
-mod hrana_over_http_1;
 mod listen;
 mod result_builder;
+mod sync;
 mod trace;
 mod types;
 #[macro_use]
@@ -12,8 +12,7 @@ pub mod timing;
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::extract::{FromRef, FromRequest, FromRequestParts, Path as AxumPath, State as AxumState};
-use axum::http::request::Parts;
+use axum::extract::{FromRequest, Path as AxumPath, State as AxumState};
 use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
@@ -28,14 +27,13 @@ use libsql_replication::rpc::replication::replication_log_server::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Number;
-use tokio::sync::{mpsc, oneshot};
 use tonic::transport::Server;
 
 use tower_http::compression::predicate::NotForContentType;
 use tower_http::compression::{DefaultPredicate, Predicate};
 use tower_http::{compression::CompressionLayer, cors};
 
-use crate::auth::{Auth, AuthError, Authenticated, Jwt, Permission, UserAuthContext};
+use crate::config::AdminApiConfig;
 use crate::connection::{Connection, RequestContext};
 use crate::error::Error;
 use crate::http::user::db_factory::MakeConnectionExtractorPath;
@@ -43,11 +41,12 @@ use crate::http::user::timing::timings_middleware;
 use crate::http::user::types::HttpQuery;
 use crate::metrics::LEGACY_HTTP_CALL;
 use crate::namespace::NamespaceStore;
-use crate::net::Accept;
+use crate::net::{Accept, Connector};
 use crate::query::{self, Query};
 use crate::query_analysis::{predict_final_state, Statement, TxnStatus};
 use crate::query_result_builder::QueryResultBuilder;
 use crate::rpc::proxy::rpc::proxy_server::{Proxy, ProxyServer};
+use crate::rpc::replication::replication_log::ReplicationLogService;
 use crate::schema::{MigrationDetails, MigrationSummary};
 use crate::utils::services::idle_shutdown::IdleShutdownKicker;
 use crate::version;
@@ -168,32 +167,6 @@ async fn handle_health() -> Response<Body> {
     Response::new(Body::empty())
 }
 
-async fn handle_upgrade(
-    AxumState(AppState { upgrade_tx, .. }): AxumState<AppState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
-    if !hyper_tungstenite::is_upgrade_request(&req) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-
-    let (response_tx, response_rx) = oneshot::channel();
-    let _: Result<_, _> = upgrade_tx
-        .send(hrana::ws::Upgrade {
-            request: req,
-            response_tx,
-        })
-        .await;
-
-    match response_rx.await {
-        Ok(response) => response.into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "sqld was not able to process the HTTP upgrade",
-        )
-            .into_response(),
-    }
-}
-
 async fn handle_version() -> Response<Body> {
     let version = version::version();
     Response::new(Body::from(version))
@@ -232,9 +205,7 @@ async fn handle_hrana_pipeline(
 /// axum's `State` extractor.
 #[derive(Clone)]
 pub(crate) struct AppState {
-    user_auth_strategy: Auth,
     namespaces: NamespaceStore,
-    upgrade_tx: mpsc::Sender<hrana::ws::Upgrade>,
     hrana_http_srv: Arc<hrana::http::Server>,
     enable_console: bool,
     disable_default_namespace: bool,
@@ -242,58 +213,31 @@ pub(crate) struct AppState {
     primary_url: Option<String>,
 }
 
-pub struct UserApi<A, P, S> {
-    pub user_auth_strategy: Auth,
+pub struct UserApi<A, P, S, C> {
     pub http_acceptor: Option<A>,
-    pub hrana_ws_acceptor: Option<A>,
     pub namespaces: NamespaceStore,
     pub idle_shutdown_kicker: Option<IdleShutdownKicker>,
     pub proxy_service: P,
     pub replication_service: S,
     pub disable_default_namespace: bool,
     pub disable_namespaces: bool,
-    pub max_response_size: u64,
     pub enable_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
+    /// The admin API is served next to the user API when it is configured
+    pub admin_api_config: Option<AdminApiConfig<C>>,
+    pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
 }
 
-impl<A, P, S> UserApi<A, P, S>
+impl<A, P, S, C> UserApi<A, P, S, C>
 where
     A: Accept,
     P: Proxy,
     S: ReplicationLog,
+    C: Connector,
 {
     pub fn configure(self, task_manager: &mut TaskManager) -> Arc<hrana::http::Server> {
-        let (hrana_accept_tx, hrana_accept_rx) = mpsc::channel(8);
-        let (hrana_upgrade_tx, hrana_upgrade_rx) = mpsc::channel(8);
         let hrana_http_srv = Arc::new(hrana::http::Server::new(self.self_url.clone()));
-
-        task_manager.spawn_until_shutdown({
-            let namespaces = self.namespaces.clone();
-            let user_auth_strategy = self.user_auth_strategy.clone();
-            let idle_kicker = self
-                .idle_shutdown_kicker
-                .clone()
-                .map(|isl| isl.into_kicker());
-            let disable_default_namespace = self.disable_default_namespace;
-            let disable_namespaces = self.disable_namespaces;
-            let max_response_size = self.max_response_size;
-            async move {
-                hrana::ws::serve(
-                    user_auth_strategy,
-                    idle_kicker,
-                    max_response_size,
-                    hrana_accept_rx,
-                    hrana_upgrade_rx,
-                    namespaces,
-                    disable_default_namespace,
-                    disable_namespaces,
-                )
-                .await
-                .context("Hrana server failed")
-            }
-        });
 
         task_manager.spawn_until_shutdown({
             let server = hrana_http_srv.clone();
@@ -303,20 +247,20 @@ where
             }
         });
 
-        if let Some(acceptor) = self.hrana_ws_acceptor {
-            task_manager.spawn_until_shutdown(async move {
-                hrana::ws::listen(acceptor, hrana_accept_tx).await;
-                Ok(())
-            });
-        }
-
         if let Some(acceptor) = self.http_acceptor {
+            // a replica has no log to serve: its sync requests fail with "not a primary"
+            let sync_service = Arc::new(ReplicationLogService::new(
+                self.namespaces.clone(),
+                self.idle_shutdown_kicker.clone(),
+                self.disable_namespaces,
+                true,
+                false,
+            ));
+
             let state = AppState {
-                user_auth_strategy: self.user_auth_strategy,
-                upgrade_tx: hrana_upgrade_tx,
                 hrana_http_srv: hrana_http_srv.clone(),
                 enable_console: self.enable_console,
-                namespaces: self.namespaces,
+                namespaces: self.namespaces.clone(),
                 disable_default_namespace: self.disable_default_namespace,
                 disable_namespaces: self.disable_namespaces,
                 primary_url: self.primary_url.clone(),
@@ -348,15 +292,11 @@ where
 
             let app = Router::new()
                 .route("/", post(handle_query))
-                .route("/", get(handle_upgrade))
                 .route("/version", get(handle_version))
                 .route("/console", get(show_console))
                 .route("/health", get(handle_health))
                 .route("/dump", get(dump::handle_dump))
                 .route("/beta/listen", get(listen::handle_listen))
-                .route("/v1", get(hrana_over_http_1::handle_index))
-                .route("/v1/execute", post(hrana_over_http_1::handle_execute))
-                .route("/v1/batch", post(hrana_over_http_1::handle_batch))
                 .route("/v2", get(crate::hrana::http::handle_index))
                 .route(
                     "/v2/pipeline",
@@ -408,7 +348,25 @@ where
                 .route("/v1/jobs", get(handle_get_migrations))
                 .route("/v1/jobs/:job_id", get(handle_get_migration_details))
                 .layer(middleware::from_fn(timings_middleware))
+                .route(
+                    "/sync",
+                    get(move |AxumState(state), headers, query| {
+                        sync::handle_sync(sync_service.clone(), state, headers, query)
+                    }),
+                )
                 .with_state(state);
+
+            let app = match self.admin_api_config {
+                Some(config) => app.merge(crate::http::admin::router(
+                    hrana_http_srv.clone(),
+                    self.namespaces.clone(),
+                    config.connector,
+                    config.disable_metrics,
+                    config.auth_key.into(),
+                    self.set_log_level,
+                )),
+                None => app,
+            };
 
             // Merge the grpc based axum router into our regular http router
             let replication = ReplicationLogServer::new(self.replication_service);
@@ -458,64 +416,6 @@ where
     }
 }
 
-/// Axum authenticated extractor
-#[tonic::async_trait]
-impl FromRequestParts<AppState> for Authenticated {
-    type Rejection = Error;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let ns = db_factory::namespace_from_headers(
-            &parts.headers,
-            state.disable_default_namespace,
-            state.disable_namespaces,
-        )?;
-        // todo dupe #auth
-        let namespace_jwt_keys = state
-            .namespaces
-            .with(ns.clone(), |ns| ns.jwt_keys())
-            .await??;
-
-        let auth = namespace_jwt_keys
-            .map(Jwt::new)
-            .map(Auth::new)
-            .unwrap_or_else(|| state.user_auth_strategy.clone());
-
-        let context = build_context(&parts.headers, &auth.user_strategy.required_fields());
-
-        Ok(auth.authenticate(context)?)
-    }
-}
-
-fn build_context(
-    headers: &hyper::HeaderMap<HeaderValue>,
-    required_fields: &Vec<&'static str>,
-) -> UserAuthContext {
-    let mut ctx = headers
-        .get(hyper::header::AUTHORIZATION)
-        .ok_or(AuthError::AuthHeaderNotFound)
-        .and_then(|h| h.to_str().map_err(|_| AuthError::AuthHeaderNonAscii))
-        .and_then(|t| UserAuthContext::from_auth_str(t))
-        .unwrap_or(UserAuthContext::empty());
-
-    for field in required_fields.iter() {
-        headers
-            .get(field.to_string())
-            .map(|h| h.to_str().ok())
-            .and_then(|t| t.map(|s| ctx.add_field(field, s.into())));
-    }
-
-    ctx
-}
-
-impl FromRef<AppState> for Auth {
-    fn from_ref(input: &AppState) -> Self {
-        input.user_auth_strategy.clone()
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]
 pub struct Json<T>(pub T);
@@ -549,7 +449,6 @@ async fn handle_get_migrations(
     AxumState(app_state): AxumState<AppState>,
     ctx: RequestContext,
 ) -> crate::Result<axum::Json<MigrationSummary>> {
-    ctx.auth().has_right(ctx.namespace(), Permission::Read)?;
     {
         // validate if this is a valid target for the request
         let store = app_state
@@ -576,7 +475,6 @@ async fn handle_get_migration_details(
     AxumPath(job_id): AxumPath<u64>,
     ctx: RequestContext,
 ) -> crate::Result<axum::Json<MigrationDetails>> {
-    ctx.auth().has_right(ctx.namespace(), Permission::Read)?;
     {
         // validate if this is a valid target for the request
         let store = app_state

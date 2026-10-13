@@ -113,7 +113,7 @@ impl From<&DatabaseConfig> for metadata::DatabaseConfig {
 }
 
 /// Durability mode specifies the `PRAGMA SYNCHRONOUS` setting for the connection
-#[derive(PartialEq, Clone, Copy, Debug, Deserialize, Serialize, Default)]
+#[derive(PartialEq, Clone, Copy, Debug, Deserialize, Serialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DurabilityMode {
     Extra,

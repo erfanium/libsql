@@ -10,13 +10,13 @@ use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant};
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::auth::Authenticated;
 use crate::broadcaster::BroadcastMsg;
 use crate::connection::config::DatabaseConfig;
 use crate::database::DatabaseKind;
 use crate::error::Error;
 use crate::metrics::NAMESPACE_LOAD_LATENCY;
 use crate::namespace::{NamespaceBottomlessDbId, NamespaceBottomlessDbIdInit, NamespaceName};
+use crate::replication::ReplicationInfo;
 use crate::stats::Stats;
 
 use super::broadcasters::{BroadcasterHandle, BroadcasterRegistry};
@@ -151,6 +151,26 @@ impl NamespaceStore {
             ns.checkpoint().await?;
         }
         Ok(())
+    }
+
+    pub async fn compact(&self, namespace: NamespaceName) -> crate::Result<bool> {
+        let entry = self
+            .inner
+            .store
+            .get_with(namespace.clone(), async { Default::default() })
+            .await;
+        let lock = entry.read().await;
+        if let Some(ns) = &*lock {
+            return Ok(ns.compact().await?);
+        }
+        Ok(false)
+    }
+
+    pub async fn replication_info(
+        &self,
+        namespace: NamespaceName,
+    ) -> crate::Result<ReplicationInfo> {
+        self.with(namespace, |ns| ns.replication_info()).await
     }
 
     pub async fn reset(
@@ -297,25 +317,6 @@ impl NamespaceStore {
         bomb.should_delete = false;
 
         Ok(())
-    }
-
-    pub async fn with_authenticated<Fun, R>(
-        &self,
-        namespace: NamespaceName,
-        auth: Authenticated,
-        f: Fun,
-    ) -> crate::Result<R>
-    where
-        Fun: FnOnce(&Namespace) -> R + 'static,
-    {
-        if self.inner.has_shutdown.load(Ordering::Relaxed) {
-            return Err(Error::NamespaceStoreShutdown);
-        }
-        if !auth.is_namespace_authorized(&namespace) {
-            return Err(Error::NamespaceDoesntExist(namespace.to_string()));
-        }
-
-        self.with(namespace, f).await
     }
 
     pub async fn with<Fun, R>(&self, namespace: NamespaceName, f: Fun) -> crate::Result<R>

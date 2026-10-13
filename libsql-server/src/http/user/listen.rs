@@ -1,10 +1,6 @@
 use crate::broadcaster::BroadcastMsg;
-use crate::error::Error;
 use crate::metrics::{LISTEN_EVENTS_DROPPED, LISTEN_EVENTS_SENT};
-use crate::{
-    auth::Authenticated,
-    namespace::{NamespaceName, NamespaceStore},
-};
+use crate::namespace::{NamespaceName, NamespaceStore};
 use axum::extract::State as AxumState;
 use axum::http::Uri;
 use axum::response::{
@@ -68,7 +64,6 @@ impl IntoResponse for ListenResponse {
 }
 
 pub(super) async fn handle_listen(
-    auth: Authenticated,
     AxumState(state): AxumState<AppState>,
     headers: HeaderMap,
     uri: Uri,
@@ -79,10 +74,6 @@ pub(super) async fn handle_listen(
         state.disable_default_namespace,
         state.disable_namespaces,
     )?;
-
-    if !auth.is_namespace_authorized(&namespace) {
-        return Err(Error::NamespaceDoesntExist(namespace.to_string()));
-    }
 
     if let Some(primary_url) = state.primary_url.as_ref() {
         let url = format!(

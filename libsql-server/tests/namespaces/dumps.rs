@@ -46,7 +46,7 @@ fn load_namespace_from_dump_from_url() {
         let client = Client::new();
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "http://dump-store:8080/"}),
             )
             .await
@@ -94,7 +94,7 @@ fn load_namespace_from_dump_from_file() {
         // path is not absolute is an error
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "file:dump.sql"}),
             )
             .await
@@ -104,7 +104,7 @@ fn load_namespace_from_dump_from_file() {
         // path doesn't exist is an error
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "file:/dump.sql"}),
             )
             .await
@@ -113,7 +113,7 @@ fn load_namespace_from_dump_from_file() {
 
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await
@@ -163,7 +163,7 @@ fn load_namespace_from_no_commit() {
         let client = Client::new();
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await
@@ -214,7 +214,7 @@ fn load_namespace_from_no_txn() {
         let client = Client::new();
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await?;
@@ -254,7 +254,7 @@ fn export_dump() {
     sim.client("client", async move {
         let client = Client::new();
         let resp = client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
         assert_eq!(resp.status(), StatusCode::OK);
 
@@ -306,7 +306,7 @@ fn load_dump_with_attach_rejected() {
         // path is not absolute is an error
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "file:dump.sql"}),
             )
             .await
@@ -316,7 +316,7 @@ fn load_dump_with_attach_rejected() {
         // path doesn't exist is an error
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "file:/dump.sql"}),
             )
             .await
@@ -325,7 +325,7 @@ fn load_dump_with_attach_rejected() {
 
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await
@@ -379,7 +379,7 @@ fn load_dump_with_invalid_sql() {
         // path is not absolute is an error
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "file:dump.sql"}),
             )
             .await
@@ -389,7 +389,7 @@ fn load_dump_with_invalid_sql() {
         // path doesn't exist is an error
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": "file:/dump.sql"}),
             )
             .await
@@ -398,7 +398,7 @@ fn load_dump_with_invalid_sql() {
 
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await
@@ -454,7 +454,7 @@ fn load_dump_with_trigger() {
 
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/debug_test/create",
+                "http://primary:8080/v1/namespaces/debug_test/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await
@@ -515,7 +515,7 @@ fn load_dump_with_case_trigger() {
 
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/case_test/create",
+                "http://primary:8080/v1/namespaces/case_test/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await
@@ -581,7 +581,7 @@ fn load_dump_with_nested_case() {
 
         let resp = client
             .post(
-                "http://primary:9090/v1/namespaces/nested_test/create",
+                "http://primary:8080/v1/namespaces/nested_test/create",
                 json!({ "dump_url": format!("file:{}", tmp_path.join("dump.sql").display())}),
             )
             .await

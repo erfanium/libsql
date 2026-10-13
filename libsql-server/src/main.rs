@@ -4,11 +4,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use clap::Parser;
 use hyper::client::HttpConnector;
-use libsql_server::auth::{parse_http_basic_auth_arg, parse_jwt_keys, user_auth_strategies, Auth};
 use tokio::sync::Notify;
 use tokio::time::Duration;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -47,28 +46,11 @@ struct Cli {
     #[clap(long)]
     enable_http_console: bool,
 
-    /// Address and port for the legacy, Web-Socket-only Hrana server.
-    #[clap(long, short = 'l', env = "SQLD_HRANA_LISTEN_ADDR")]
-    hrana_listen_addr: Option<SocketAddr>,
+    /// Key of the admin API, which is served on the same port as the user API: requests to it
+    /// carry the key as a bearer token. Without a key, there is no admin API.
+    #[clap(long, env = "ADMIN_KEY")]
+    admin_key: Option<String>,
 
-    /// The address and port for the admin HTTP API.
-    #[clap(long, env = "SQLD_ADMIN_LISTEN_ADDR")]
-    admin_listen_addr: Option<SocketAddr>,
-
-    /// Path to a file with a JWT decoding key used to authenticate clients in the Hrana and HTTP
-    /// APIs. The key is either a PKCS#8-encoded Ed25519 public key in PEM, or just plain bytes of
-    /// the Ed25519 public key in URL-safe base64.
-    ///
-    /// It is possible to provide multiple JWT decoding keys in a single file by concatenating them
-    /// together. All decoding keys will be tried when parsing incoming JWT's.
-    ///
-    /// You can also pass the key directly in the env variable SQLD_AUTH_JWT_KEY.
-    #[clap(long, env = "SQLD_AUTH_JWT_KEY_FILE")]
-    auth_jwt_key_file: Option<PathBuf>,
-    /// Specifies legacy HTTP basic authentication. The argument must be in format "basic:$PARAM",
-    /// where $PARAM is base64-encoded string "$USERNAME:$PASSWORD".
-    #[clap(long, env = "SQLD_HTTP_AUTH")]
-    http_auth: Option<String>,
     /// URL that points to the HTTP API of this server. If set, this is used to implement "sticky
     /// sessions" in Hrana over HTTP.
     #[clap(long, env = "SQLD_HTTP_SELF_URL")]
@@ -183,16 +165,6 @@ struct Cli {
     #[clap(long, env = "SQLD_CHECKPOINT_INTERVAL_S")]
     checkpoint_interval_s: Option<u64>,
 
-    /// By default, all request for which a namespace can't be determined fallback to the default
-    /// namespace `default`. This flag disables that.
-    #[clap(long)]
-    disable_default_namespace: bool,
-
-    /// Enable the namespaces features. Namespaces are disabled by default, and all requests target
-    /// the default namespace.
-    #[clap(long)]
-    enable_namespaces: bool,
-
     /// Enable snapshot at shutdown
     #[clap(long)]
     snapshot_at_shutdown: bool,
@@ -281,10 +253,6 @@ struct Cli {
     #[clap(long)]
     enable_deadlock_monitor: bool,
 
-    /// Auth key for the admin API
-    #[clap(long, env = "LIBSQL_ADMIN_AUTH_KEY", requires = "admin_listen_addr")]
-    admin_auth_key: Option<String>,
-
     /// Whether to perform a sync of all namespaces with remote on startup
     #[clap(
         long,
@@ -309,21 +277,6 @@ struct Cli {
     /// Disable prometheus metrics collection
     #[clap(long, env = "LIBSQL_DISABLE_METRICS")]
     disable_metrics: bool,
-
-    #[clap(subcommand)]
-    subcommand: Option<UtilsSubcommands>,
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum UtilsSubcommands {
-    AdminShell {
-        #[clap(long, default_value = "http://127.0.0.1:9090")]
-        admin_api_url: String,
-        #[clap(long)]
-        namespace: Option<String>,
-        #[clap(long)]
-        auth: Option<String>,
-    },
 }
 
 impl Cli {
@@ -422,43 +375,6 @@ fn make_db_config(config: &Cli) -> anyhow::Result<DbConfig> {
     })
 }
 
-async fn make_user_auth_strategy(config: &Cli) -> anyhow::Result<Auth> {
-    if let Some(http_auth) = config.http_auth.as_deref() {
-        tracing::info!("Using legacy HTTP basic authentication");
-
-        let credential =
-            parse_http_basic_auth_arg(http_auth)?.expect("Invalid HTTP Basic configuration");
-
-        return Ok(Auth::new(user_auth_strategies::HttpBasic::new(
-            credential.into(),
-        )));
-    }
-
-    let auth_jwt_keys = if let Some(ref file_path) = config.auth_jwt_key_file {
-        let data = tokio::fs::read_to_string(file_path)
-            .await
-            .context("Could not read file with JWT key(s)")?;
-        Some(data)
-    } else {
-        match env::var("SQLD_AUTH_JWT_KEY") {
-            Ok(keys) => Some(keys),
-            Err(env::VarError::NotPresent) => None,
-            Err(env::VarError::NotUnicode(_)) => {
-                bail!("Env variable SQLD_AUTH_JWT_KEY does not contain a valid Unicode value")
-            }
-        }
-    };
-
-    if let Some(jwt_keys) = auth_jwt_keys.as_deref() {
-        let jwt_keys: Vec<jsonwebtoken::DecodingKey> =
-            parse_jwt_keys(jwt_keys).context("Could not parse JWT decoding key(s)")?;
-        tracing::info!("Using JWT-based authentication");
-        return Ok(Auth::new(user_auth_strategies::Jwt::new(jwt_keys)));
-    }
-
-    Ok(Auth::new(user_auth_strategies::Disabled::new()))
-}
-
 async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
     let http_acceptor =
         AddrIncoming::new(tokio::net::TcpListener::bind(config.http_listen_addr).await?);
@@ -467,53 +383,27 @@ async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
         config.http_listen_addr
     );
 
-    let hrana_ws_acceptor = match config.hrana_listen_addr {
-        Some(addr) => {
-            let incoming = AddrIncoming::new(tokio::net::TcpListener::bind(addr).await?);
-
-            tracing::info!(
-                "listening for incoming user hrana websocket connection on {}",
-                addr
-            );
-
-            Some(incoming)
-        }
-        None => None,
-    };
-
-    let auth_strategy = make_user_auth_strategy(&config).await?;
-
     Ok(UserApiConfig {
         http_acceptor: Some(http_acceptor),
-        hrana_ws_acceptor,
         enable_http_console: config.enable_http_console,
         self_url: config.http_self_url.clone(),
         primary_url: config.http_primary_url.clone(),
-        auth_strategy,
     })
 }
 
-async fn make_admin_api_config(config: &Cli) -> anyhow::Result<Option<AdminApiConfig>> {
-    match config.admin_listen_addr {
-        Some(addr) => {
-            let acceptor = AddrIncoming::new(tokio::net::TcpListener::bind(addr).await?);
+fn make_admin_api_config(config: &Cli) -> Option<AdminApiConfig> {
+    let auth_key = config.admin_key.clone()?;
+    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .https_or_http()
+        .enable_http1()
+        .build();
 
-            tracing::info!("listening for incoming adming HTTP connection on {}", addr);
-            let connector = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .https_or_http()
-                .enable_http1()
-                .build();
-
-            Ok(Some(AdminApiConfig {
-                acceptor,
-                connector,
-                disable_metrics: config.disable_metrics,
-                auth_key: config.admin_auth_key.clone(),
-            }))
-        }
-        None => Ok(None),
-    }
+    Some(AdminApiConfig {
+        connector,
+        disable_metrics: config.disable_metrics,
+        auth_key,
+    })
 }
 
 async fn make_rpc_server_config(config: &Cli) -> anyhow::Result<Option<RpcServerConfig>> {
@@ -659,7 +549,7 @@ async fn build_server(
 ) -> anyhow::Result<Server> {
     let db_config = make_db_config(config)?;
     let user_api_config = make_user_api_config(config).await?;
-    let admin_api_config = make_admin_api_config(config).await?;
+    let admin_api_config = make_admin_api_config(config);
     let rpc_server_config = make_rpc_server_config(config).await?;
     let rpc_client_config = make_rpc_client_config(config).await?;
     let heartbeat_config = make_hearbeat_config(config);
@@ -669,6 +559,7 @@ async fn build_server(
     tokio::spawn({
         let shutdown = shutdown.clone();
         async move {
+            let mut shutting_down = false;
             loop {
                 let signal = shutdown_signal()
                     .await
@@ -678,6 +569,13 @@ async fn build_server(
                     "Got {} shutdown signal, gracefully shutting down...this may take some time",
                     signal
                 );
+
+                // the graceful shutdown can take long: a second signal does not wait for it
+                if shutting_down {
+                    tracing::error!("second shutdown signal received, exiting now");
+                    std::process::exit(1);
+                }
+                shutting_down = true;
 
                 shutdown.notify_waiters();
             }
@@ -706,8 +604,9 @@ async fn build_server(
         initial_idle_shutdown_timeout: config
             .initial_idle_shutdown_timeout_s
             .map(Duration::from_secs),
-        disable_default_namespace: config.disable_default_namespace,
-        disable_namespaces: !config.enable_namespaces,
+        // every request names its namespace: there is no default one to fall back to
+        disable_default_namespace: true,
+        disable_namespaces: false,
         shutdown,
         max_active_namespaces: config.max_active_namespaces,
         meta_store_config,
@@ -758,26 +657,6 @@ async fn main() -> Result<()> {
                 .with_filter(filter),
         )
         .init();
-
-    if let Some(ref subcommand) = args.subcommand {
-        match subcommand {
-            UtilsSubcommands::AdminShell {
-                admin_api_url,
-                namespace,
-                auth,
-            } => {
-                let client = libsql_server::admin_shell::AdminShellClient::new(
-                    admin_api_url.clone(),
-                    auth.clone(),
-                );
-                if let Some(ns) = namespace {
-                    client.run_namespace(ns).await?;
-                }
-            }
-        }
-
-        return Ok(());
-    }
 
     args.print_welcome_message();
     let server = build_server(&args, set_log_level).await?;

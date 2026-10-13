@@ -6,7 +6,6 @@ use hyper::http::request::Parts;
 use hyper::HeaderMap;
 use libsql_replication::rpc::replication::NAMESPACE_METADATA_KEY;
 
-use crate::auth::Authenticated;
 use crate::connection::MakeConnection;
 use crate::database::Connection;
 use crate::error::Error;
@@ -24,7 +23,6 @@ impl FromRequestParts<AppState> for MakeConnectionExtractor {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let auth = Authenticated::from_request_parts(parts, state).await?;
         let ns = namespace_from_headers(
             &parts.headers,
             state.disable_default_namespace,
@@ -33,7 +31,7 @@ impl FromRequestParts<AppState> for MakeConnectionExtractor {
         Ok(Self(
             state
                 .namespaces
-                .with_authenticated(ns, auth, |ns| ns.db.connection_maker())
+                .with(ns, |ns| ns.db.connection_maker())
                 .await?,
         ))
     }
@@ -48,10 +46,12 @@ pub fn namespace_from_headers(
         return Ok(NamespaceName::default());
     }
 
-    if let Some(from_metadata) = headers.get(NAMESPACE_METADATA_KEY) {
-        try_namespace_from_metadata(from_metadata)
-    } else if let Some(from_ns_header) = headers.get("x-namespace") {
+    // `x-namespace` is what the backend sets on the requests it proxies, after it authenticated
+    // the user: it wins over anything the client may have sent along.
+    if let Some(from_ns_header) = headers.get("x-namespace") {
         try_namespace_from_header(from_ns_header)
+    } else if let Some(from_metadata) = headers.get(NAMESPACE_METADATA_KEY) {
+        try_namespace_from_metadata(from_metadata)
     } else if let Some(from_host) = headers.get("host") {
         try_namespace_from_host(from_host, disable_default_namespace)
     } else if !disable_default_namespace {
@@ -99,14 +99,13 @@ impl FromRequestParts<AppState> for MakeConnectionExtractorPath {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let auth = Authenticated::from_request_parts(parts, state).await?;
         let Path((ns, _)) = Path::<(NamespaceName, String)>::from_request_parts(parts, state)
             .await
             .map_err(|e| Error::InvalidPath(e.to_string()))?;
         Ok(Self(
             state
                 .namespaces
-                .with_authenticated(ns, auth, |ns| ns.db.connection_maker())
+                .with(ns, |ns| ns.db.connection_maker())
                 .await?,
         ))
     }

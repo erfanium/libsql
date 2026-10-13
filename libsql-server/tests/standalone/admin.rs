@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use crate::common::{
     http::Client,
-    net::{SimServer as _, TestServer, TurmoilAcceptor, TurmoilConnector},
+    net::{SimServer as _, TestServer, TurmoilConnector},
 };
 
 #[test]
@@ -22,15 +22,63 @@ fn admin_auth() {
         let server = TestServer {
             path: tmp.path().to_owned().into(),
             user_api_config: UserApiConfig {
-                hrana_ws_acceptor: None,
                 ..Default::default()
             },
             admin_api_config: Some(AdminApiConfig {
-                acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                 connector: TurmoilConnector,
                 disable_metrics: true,
-                auth_key: Some("secretkey".into()),
+                auth_key: "secretkey".into(),
             }),
+            disable_namespaces: false,
+            ..Default::default()
+        };
+        server.start_sim(8080).await?;
+        Ok(())
+    });
+
+    sim.client("test", async {
+        let client = Client::new();
+
+        // the key the client sends by default is not the one of this server
+        assert_eq!(
+            client
+                .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(client
+            .post_with_headers(
+                "http://primary:8080/v1/namespaces/foo/create",
+                &[(AUTHORIZATION, "Bearer secretkey")],
+                json!({})
+            )
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test]
+fn no_admin_api_without_key() {
+    let mut sim = turmoil::Builder::new()
+        .simulation_duration(Duration::from_secs(1000))
+        .build();
+
+    sim.host("primary", || async move {
+        let tmp = tempdir().unwrap();
+        let server = TestServer {
+            path: tmp.path().to_owned().into(),
+            user_api_config: UserApiConfig {
+                ..Default::default()
+            },
+            admin_api_config: None,
             disable_namespaces: false,
             ..Default::default()
         };
@@ -43,22 +91,20 @@ fn admin_auth() {
 
         assert_eq!(
             client
-                .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+                .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::UNAUTHORIZED
+            StatusCode::NOT_FOUND
         );
-        assert!(client
-            .post_with_headers(
-                "http://primary:9090/v1/namespaces/foo/create",
-                &[(AUTHORIZATION, "basic  secretkey")],
-                json!({})
-            )
-            .await
-            .unwrap()
-            .status()
-            .is_success());
+        assert_eq!(
+            client
+                .get("http://primary:8080/metrics")
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
 
         Ok(())
     });

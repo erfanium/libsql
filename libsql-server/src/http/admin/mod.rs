@@ -1,4 +1,3 @@
-use anyhow::Context as _;
 use axum::body::StreamBody;
 use axum::extract::{FromRef, Path, State};
 use axum::middleware::Next;
@@ -16,20 +15,20 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
 use tokio_util::io::{CopyToBytes, ReaderStream, SinkWriter};
 use tokio_util::sync::PollSender;
 use tower_http::trace::DefaultOnResponse;
 use url::Url;
 
-use crate::auth::parse_jwt_keys;
 use crate::connection::config::{DatabaseConfig, DurabilityMode};
 use crate::error::{Error, LoadDumpError};
 use crate::hrana;
 use crate::namespace::{DumpStream, NamespaceName, NamespaceStore, RestoreOption};
 use crate::net::Connector;
+use crate::replication::ReplicationInfo;
 use crate::LIBSQL_PAGE_SIZE;
 
+pub mod openapi;
 pub mod stats;
 
 #[derive(Clone)]
@@ -59,18 +58,17 @@ impl<C> FromRef<Arc<AppState<C>>> for Metrics {
 
 static PROM_HANDLE: Mutex<OnceCell<PrometheusHandle>> = Mutex::new(OnceCell::new());
 
-pub async fn run<A, C>(
-    acceptor: A,
+/// The admin API, served on the same port as the user API: every route of it wants the admin
+/// key as a bearer token.
+pub fn router<C>(
     user_http_server: Arc<hrana::http::Server>,
     namespaces: NamespaceStore,
     connector: C,
     disable_metrics: bool,
-    shutdown: Arc<Notify>,
-    auth: Option<Arc<str>>,
+    auth: Arc<str>,
     set_env_filter: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Sync + Send + 'static>>,
-) -> anyhow::Result<()>
+) -> axum::Router
 where
-    A: crate::net::Accept,
     C: Connector,
 {
     let app_label = std::env::var("SQLD_APP_LABEL").ok();
@@ -141,7 +139,6 @@ where
         handle: prom_handle,
     };
     let router = axum::Router::new()
-        .route("/", get(handle_get_index))
         .route(
             "/v1/namespaces/:namespace/config",
             get(handle_get_config).post(handle_post_config),
@@ -157,6 +154,11 @@ where
         .route(
             "/v1/namespaces/:namespace/checkpoint",
             post(handle_checkpoint),
+        )
+        .route("/v1/namespaces/:namespace/compact", post(handle_compact))
+        .route(
+            "/v1/namespaces/:namespace/replication",
+            get(handle_replication),
         )
         .route("/v1/namespaces/:namespace", delete(handle_delete_namespace))
         .route("/v1/namespaces/:namespace/stats", get(stats::handle_stats))
@@ -187,61 +189,53 @@ where
                 ),
         );
 
-    let admin_shell = crate::admin_shell::make_svc(namespaces.clone());
-    let grpc_router = tonic::transport::Server::builder()
-        .accept_http1(true)
-        .add_service(tonic_web::enable(admin_shell))
-        .into_router();
-
-    let router = router
-        .merge(grpc_router)
-        .layer(axum::middleware::from_fn_with_state(auth, auth_middleware));
-
-    hyper::server::Server::builder(acceptor)
-        .serve(router.into_make_service())
-        .with_graceful_shutdown(shutdown.notified())
-        .await
-        .context("Could not bind admin HTTP API server")?;
-
-    Ok(())
+    router
+        .layer(axum::middleware::from_fn_with_state(auth, auth_middleware))
+        // what the API looks like is no secret: the docs are readable without the key
+        .merge(openapi::router())
 }
 
 async fn auth_middleware<B>(
-    State(auth): State<Option<Arc<str>>>,
+    State(auth): State<Arc<str>>,
     request: Request<B>,
     next: Next<B>,
 ) -> Result<axum::response::Response, StatusCode> {
-    if let Some(ref auth) = auth {
-        let Some(auth_header) = request.headers().get("authorization") else {
-            return Err(StatusCode::UNAUTHORIZED);
-        };
-        let Ok(auth_str) = std::str::from_utf8(auth_header.as_bytes()) else {
-            return Err(StatusCode::UNAUTHORIZED);
-        };
+    let key = request
+        .headers()
+        .get(hyper::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .and_then(|header| header.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, key)| key.trim());
 
-        let mut split = auth_str.split_whitespace();
-        match split.next() {
-            Some(s) if s.trim().eq_ignore_ascii_case("basic") => (),
-            _ => return Err(StatusCode::UNAUTHORIZED),
-        }
-
-        match split.next() {
-            Some(s) if s.trim() == auth.as_ref() => (),
-            _ => return Err(StatusCode::UNAUTHORIZED),
-        }
+    if key != Some(auth.as_ref()) {
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
     Ok(next.run(request).await)
 }
 
-async fn handle_get_index() -> &'static str {
-    "Welcome to the sqld admin API"
-}
-
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "server",
+    summary = "Prometheus metrics",
+    responses((status = 200, body = String, content_type = "text/plain")),
+    security(("admin_key" = [])),
+)]
 async fn handle_metrics(State(metrics): State<Metrics>) -> String {
     metrics.render()
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/namespaces/{namespace}/config",
+    tag = "namespaces",
+    summary = "Configuration of a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    responses((status = 200, body = HttpDatabaseConfig), (status = 404, description = "No such namespace")),
+    security(("admin_key" = [])),
+)]
 async fn handle_get_config<C: Connector>(
     State(app_state): State<Arc<AppState<C>>>,
     Path(namespace): Path<String>,
@@ -258,7 +252,6 @@ async fn handle_get_config<C: Connector>(
         block_reason: config.block_reason.clone(),
         max_db_size: Some(max_db_size),
         heartbeat_url: config.heartbeat_url.clone().map(|u| u.into()),
-        jwt_key: config.jwt_key.clone(),
         allow_attach: config.allow_attach,
         txn_timeout_s: config.txn_timeout.map(|d| d.as_secs() as u64),
         durability_mode: Some(config.durability_mode),
@@ -266,6 +259,14 @@ async fn handle_get_config<C: Connector>(
     Ok(Json(resp))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/diagnostics",
+    tag = "server",
+    summary = "State of the connection of every open Hrana stream",
+    responses((status = 200, body = Vec<String>)),
+    security(("admin_key" = [])),
+)]
 async fn handle_diagnostics<C>(
     State(app_state): State<Arc<AppState<C>>>,
 ) -> crate::Result<Json<Vec<String>>> {
@@ -293,18 +294,17 @@ async fn handle_diagnostics<C>(
     Ok(Json(diagnostics))
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 struct HttpDatabaseConfig {
     block_reads: bool,
     block_writes: bool,
     #[serde(default)]
     block_reason: Option<String>,
     #[serde(default)]
+    #[schema(value_type = Option<String>, example = "1GB")]
     max_db_size: Option<bytesize::ByteSize>,
     #[serde(default)]
     heartbeat_url: Option<String>,
-    #[serde(default)]
-    jwt_key: Option<String>,
     #[serde(default)]
     allow_attach: bool,
     #[serde(default)]
@@ -313,15 +313,21 @@ struct HttpDatabaseConfig {
     durability_mode: Option<DurabilityMode>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/namespaces/{namespace}/config",
+    tag = "namespaces",
+    summary = "Update the configuration of a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    request_body = HttpDatabaseConfig,
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn handle_post_config<C>(
     State(app_state): State<Arc<AppState<C>>>,
     Path(namespace): Path<String>,
     Json(req): Json<HttpDatabaseConfig>,
 ) -> crate::Result<()> {
-    if let Some(jwt_key) = req.jwt_key.as_deref() {
-        // Check that the jwt keys are correct
-        parse_jwt_keys(jwt_key)?;
-    }
     let store = app_state
         .namespaces
         .config_store(NamespaceName::from_string(namespace.clone())?)
@@ -339,13 +345,11 @@ async fn handle_post_config<C>(
     if let Some(url) = req.heartbeat_url {
         updated.heartbeat_url = Some(Url::parse(&url)?);
     }
-    updated.jwt_key = req.jwt_key;
     if let Some(mode) = req.durability_mode {
         updated.durability_mode = mode;
     }
 
     store.store(updated.clone()).await?;
-    // we better to not log jwt token - so let's explicitly log necessary fields
     tracing::info!(
         message = "updated db config",
         namespace = namespace,
@@ -364,13 +368,14 @@ async fn handle_post_config<C>(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct CreateNamespaceReq {
+    #[schema(value_type = Option<String>)]
     dump_url: Option<Url>,
+    #[schema(value_type = Option<String>, example = "1GB")]
     max_db_size: Option<bytesize::ByteSize>,
     heartbeat_url: Option<String>,
     bottomless_db_id: Option<String>,
-    jwt_key: Option<String>,
     txn_timeout_s: Option<u64>,
     max_row_size: Option<u64>,
     /// If true, current namespace acts as a DB used solely for multi-db schema updates.
@@ -378,6 +383,7 @@ struct CreateNamespaceReq {
     shared_schema: bool,
     /// If some, this is a [NamespaceName] reference to a shared schema DB.
     #[serde(default)]
+    #[schema(value_type = Option<String>)]
     shared_schema_name: Option<NamespaceName>,
     #[serde(default)]
     allow_attach: bool,
@@ -385,18 +391,22 @@ struct CreateNamespaceReq {
     durability_mode: Option<DurabilityMode>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/namespaces/{namespace}/create",
+    tag = "namespaces",
+    summary = "Create a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    request_body = CreateNamespaceReq,
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn handle_create_namespace<C: Connector>(
     State(app_state): State<Arc<AppState<C>>>,
     Path(namespace): Path<NamespaceName>,
     Json(req): Json<CreateNamespaceReq>,
 ) -> crate::Result<()> {
     let mut config = DatabaseConfig::default();
-
-    if let Some(jwt_key) = req.jwt_key {
-        // Check that the jwt keys are correct
-        parse_jwt_keys(&jwt_key)?;
-        config.jwt_key = Some(jwt_key);
-    }
 
     if req.shared_schema_name.is_some() && req.dump_url.is_some() {
         return Err(Error::SharedSchemaUsageError(
@@ -441,11 +451,21 @@ async fn handle_create_namespace<C: Connector>(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ForkNamespaceReq {
     timestamp: NaiveDateTime,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/namespaces/{namespace}/fork/{to}",
+    tag = "namespaces",
+    summary = "Copy a namespace into a new one",
+    params(("namespace" = String, Path, description = "Name of the namespace"), ("to" = String, Path, description = "Name of the namespace to create")),
+    request_body = Option<ForkNamespaceReq>,
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn handle_fork_namespace<C>(
     State(app_state): State<Arc<AppState<C>>>,
     Path((from, to)): Path<(String, String)>,
@@ -509,12 +529,22 @@ where
     }
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::ToSchema)]
 struct DeleteNamespaceReq {
     #[serde(default)]
     pub keep_backup: bool,
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/namespaces/{namespace}",
+    tag = "namespaces",
+    summary = "Delete a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    request_body = Option<DeleteNamespaceReq>,
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn handle_delete_namespace<C>(
     State(app_state): State<Arc<AppState<C>>>,
     Path(namespace): Path<String>,
@@ -532,6 +562,15 @@ async fn handle_delete_namespace<C>(
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/log-filter",
+    tag = "server",
+    summary = "Replace the log filter of the server, in the syntax of `RUST_LOG`",
+    request_body = String,
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn handle_set_log_filter<C>(
     State(app_state): State<Arc<AppState<C>>>,
     body: String,
@@ -542,6 +581,49 @@ async fn handle_set_log_filter<C>(
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/namespaces/{namespace}/compact",
+    tag = "namespaces",
+    summary = "Compact the replication log of a namespace into a snapshot",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
+async fn handle_compact<C>(
+    State(app_state): State<Arc<AppState<C>>>,
+    Path(namespace): Path<NamespaceName>,
+) -> crate::Result<()> {
+    app_state.namespaces.compact(namespace).await?;
+    Ok(())
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/namespaces/{namespace}/replication",
+    tag = "namespaces",
+    summary = "Where the replication log of a namespace is at",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    responses((status = 200, body = ReplicationInfo)),
+    security(("admin_key" = [])),
+)]
+async fn handle_replication<C>(
+    State(app_state): State<Arc<AppState<C>>>,
+    Path(namespace): Path<NamespaceName>,
+) -> crate::Result<Json<ReplicationInfo>> {
+    let info = app_state.namespaces.replication_info(namespace).await?;
+    Ok(Json(info))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/namespaces/{namespace}/checkpoint",
+    tag = "namespaces",
+    summary = "Checkpoint the WAL of a namespace",
+    params(("namespace" = String, Path, description = "Name of the namespace")),
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn handle_checkpoint<C>(
     State(app_state): State<Arc<AppState<C>>>,
     Path(namespace): Path<NamespaceName>,
@@ -550,7 +632,7 @@ async fn handle_checkpoint<C>(
     Ok(())
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 struct EnableHeapProfileRequest {
     #[serde(default)]
     max_stack_depth: Option<usize>,
@@ -562,6 +644,15 @@ struct EnableHeapProfileRequest {
     sample_rate: Option<f64>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/profile/heap/enable",
+    tag = "server",
+    summary = "Start a heap profile",
+    request_body = EnableHeapProfileRequest,
+    responses((status = 200, body = String, description = "Id of the profile")),
+    security(("admin_key" = [])),
+)]
 async fn enable_profile_heap(Json(req): Json<EnableHeapProfileRequest>) -> crate::Result<String> {
     let path = tokio::task::spawn_blocking(move || {
         rheaper::enable_tracking(rheaper::TrackerConfig {
@@ -578,6 +669,15 @@ async fn enable_profile_heap(Json(req): Json<EnableHeapProfileRequest>) -> crate
     Ok(path.file_name().unwrap().to_str().unwrap().to_string())
 }
 
+#[utoipa::path(
+    post,
+    path = "/profile/heap/disable/{id}",
+    tag = "server",
+    summary = "Stop a heap profile and download it",
+    params(("id" = String, Path, description = "Id of the profile")),
+    responses((status = 200, content_type = "application/x-tar")),
+    security(("admin_key" = [])),
+)]
 async fn disable_profile_heap(Path(profile): Path<String>) -> impl axum::response::IntoResponse {
     let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
     tokio::task::spawn_blocking(move || {
@@ -604,6 +704,15 @@ async fn disable_profile_heap(Path(profile): Path<String>) -> impl axum::respons
     body
 }
 
+#[utoipa::path(
+    delete,
+    path = "/profile/heap/{id}",
+    tag = "server",
+    summary = "Delete a heap profile",
+    params(("id" = String, Path, description = "Id of the profile")),
+    responses((status = 200)),
+    security(("admin_key" = [])),
+)]
 async fn delete_profile_heap(Path(profile): Path<String>) -> crate::Result<()> {
     let profile_dir = PathBuf::from("heap_profile").join(&profile);
     tokio::fs::remove_dir_all(&profile_dir).await?;

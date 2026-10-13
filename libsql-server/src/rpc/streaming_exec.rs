@@ -365,7 +365,6 @@ pub mod test {
     use tempfile::tempdir;
     use tokio_stream::wrappers::ReceiverStream;
 
-    use crate::auth::Authenticated;
     use crate::connection::legacy::LegacyConnection;
     use crate::connection::program::Program;
     use crate::namespace::meta_store::{metastore_connection_maker, MetaStore};
@@ -393,7 +392,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::Anonymous,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -425,7 +423,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -453,7 +450,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -483,7 +479,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -546,7 +541,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(2);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -579,7 +573,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -612,7 +605,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),
@@ -647,7 +639,6 @@ pub mod test {
         let (snd, rcv) = mpsc::channel(1);
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),

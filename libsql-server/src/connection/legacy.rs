@@ -26,7 +26,7 @@ use super::connection_core::{CoreConnection, GetCurrentFrameNo};
 use super::connection_manager::{
     ConnectionManager, InnerWalManager, ManagedConnectionWal, ManagedConnectionWalWrapper,
 };
-use super::program::{check_describe_auth, check_program_auth, DescribeResponse};
+use super::program::{check_program_auth, DescribeResponse};
 use super::{MakeConnection, Program, RequestContext, TXN_TIMEOUT};
 
 pub struct MakeLegacyConnection<W> {
@@ -375,11 +375,7 @@ where
         ctx: RequestContext,
         builder: B,
     ) -> Result<B> {
-        let inner = self.inner.clone();
-        let config = tokio::task::spawn_blocking(move || inner.lock().config())
-            .await
-            .unwrap();
-        check_program_auth(&ctx, &pgm, &config).await?;
+        check_program_auth(&ctx, &pgm).await?;
         let conn = self.inner.clone();
         CoreConnection::run_async(conn, pgm, builder).await
     }
@@ -406,11 +402,10 @@ where
     async fn describe(
         &self,
         sql: String,
-        ctx: RequestContext,
+        _ctx: RequestContext,
         _replication_index: Option<FrameNo>,
     ) -> Result<crate::Result<DescribeResponse>> {
         DESCRIBE_COUNT.increment(1);
-        check_describe_auth(ctx)?;
         let conn = self.inner.clone();
         let res = tokio::task::spawn_blocking(move || conn.lock().describe(&sql))
             .await

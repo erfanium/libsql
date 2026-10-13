@@ -6,63 +6,24 @@ use libsql_replication::rpc::proxy::{
 use tokio_stream::StreamExt;
 use tonic::{transport::Channel, Request, Status};
 
-use crate::auth::parsers::parse_grpc_auth_header;
-use crate::auth::{Auth, Jwt};
-use crate::namespace::NamespaceStore;
-
 pub struct ReplicaProxyService {
     client: ProxyClient<Channel>,
-    user_auth_strategy: Auth,
     disable_namespaces: bool,
-    namespaces: NamespaceStore,
 }
 
 impl ReplicaProxyService {
-    pub fn new(
-        channel: Channel,
-        uri: Uri,
-        namespaces: NamespaceStore,
-        user_auth_strategy: Auth,
-        disable_namespaces: bool,
-    ) -> Self {
+    pub fn new(channel: Channel, uri: Uri, disable_namespaces: bool) -> Self {
         let client = ProxyClient::with_origin(channel, uri);
         Self {
             client,
-            user_auth_strategy,
             disable_namespaces,
-            namespaces,
         }
     }
 
-    async fn do_auth<T>(&self, req: &mut Request<T>) -> Result<(), Status> {
-        let namespace = super::extract_namespace(self.disable_namespaces, req)?;
-
-        // todo dupe #auth
-        let jwt_result = self
-            .namespaces
-            .with(namespace.clone(), |ns| ns.jwt_keys())
-            .await;
-
-        let namespace_jwt_keys = jwt_result.and_then(|s| s);
-
-        let auth = match namespace_jwt_keys {
-            Ok(Some(key)) => Ok(Auth::new(Jwt::new(key))),
-            Ok(None) | Err(crate::error::Error::NamespaceDoesntExist(_)) => {
-                Ok(self.user_auth_strategy.clone())
-            }
-            Err(e) => Err(Status::internal(format!(
-                "Can't fetch jwt key for a namespace: {}",
-                e
-            ))),
-        }?;
-
-        let auth_context =
-            parse_grpc_auth_header(req.metadata(), &auth.user_strategy.required_fields()).map_err(
-                |e| tonic::Status::internal(format!("Error parsing auth header: {}", e)),
-            )?;
-        auth.authenticate(auth_context)?.upgrade_grpc_request(req);
-
-        return Ok(());
+    /// The request is forwarded as it is: the primary resolves its namespace again
+    fn check_namespace<T>(&self, req: &Request<T>) -> Result<(), Status> {
+        super::extract_namespace(self.disable_namespaces, req)?;
+        Ok(())
     }
 }
 
@@ -89,18 +50,18 @@ impl Proxy for ReplicaProxyService {
                 }
             }
         };
-        let mut req = tonic::Request::from_parts(meta, ext, stream);
-        self.do_auth(&mut req).await?;
+        let req = tonic::Request::from_parts(meta, ext, stream);
+        self.check_namespace(&req)?;
         let mut client = self.client.clone();
         client.stream_exec(req).await
     }
 
     async fn execute(
         &self,
-        mut req: tonic::Request<ProgramReq>,
+        req: tonic::Request<ProgramReq>,
     ) -> Result<tonic::Response<ExecuteResults>, tonic::Status> {
         tracing::debug!("execute");
-        self.do_auth(&mut req).await?;
+        self.check_namespace(&req)?;
 
         let mut client = self.client.clone();
         client.execute(req).await
@@ -109,9 +70,9 @@ impl Proxy for ReplicaProxyService {
     //TODO: also handle cleanup on peer disconnect
     async fn disconnect(
         &self,
-        mut msg: tonic::Request<DisconnectMessage>,
+        msg: tonic::Request<DisconnectMessage>,
     ) -> Result<tonic::Response<Ack>, tonic::Status> {
-        self.do_auth(&mut msg).await?;
+        self.check_namespace(&msg)?;
 
         let mut client = self.client.clone();
         client.disconnect(msg).await
@@ -119,9 +80,9 @@ impl Proxy for ReplicaProxyService {
 
     async fn describe(
         &self,
-        mut req: tonic::Request<DescribeRequest>,
+        req: tonic::Request<DescribeRequest>,
     ) -> Result<tonic::Response<DescribeResult>, tonic::Status> {
-        self.do_auth(&mut req).await?;
+        self.check_namespace(&req)?;
 
         let mut client = self.client.clone();
         client.describe(req).await

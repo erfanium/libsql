@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use hyper_rustls::TlsAcceptor;
 use libsql_replication::rpc::replication::replication_log_server::ReplicationLogServer;
 use libsql_replication::rpc::replication::{BoxReplicationService, NAMESPACE_METADATA_KEY};
@@ -122,14 +124,19 @@ fn extract_namespace<T>(
         return Ok(NamespaceName::default());
     }
 
-    if let Some(namespace) = req.metadata().get_bin(NAMESPACE_METADATA_KEY) {
+    // `x-namespace` is what the backend sets on the requests it proxies, after it authenticated
+    // the user: it wins over the `x-namespace-bin` of the client.
+    if let Some(namespace) = req.metadata().get("x-namespace") {
+        NamespaceName::from_bytes(Bytes::copy_from_slice(namespace.as_bytes()))
+            .map_err(|_| Status::invalid_argument("Invalid namespace name"))
+    } else if let Some(namespace) = req.metadata().get_bin(NAMESPACE_METADATA_KEY) {
         let bytes = namespace
             .to_bytes()
             .map_err(|_| Status::invalid_argument("Metadata can't be converted into Bytes"))?;
         NamespaceName::from_bytes(bytes)
             .map_err(|_| Status::invalid_argument("Invalid namespace name"))
     } else {
-        Err(Status::invalid_argument("Missing x-namespace-bin metadata"))
+        Err(Status::invalid_argument("Missing x-namespace metadata"))
     }
 }
 

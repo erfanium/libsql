@@ -19,7 +19,6 @@ use crate::replication::FrameNo;
 use crate::stats::{Stats, StatsUpdateMessage};
 use crate::{Result, BLOCKING_RT};
 
-use super::config::DatabaseConfig;
 use super::program::{DescribeCol, DescribeParam, DescribeResponse, Program, Vm};
 
 pub type GetCurrentFrameNo = Arc<dyn Fn() -> Option<FrameNo> + Send + Sync + 'static>;
@@ -135,10 +134,6 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
 
     pub(super) fn raw(&self) -> &libsql_sys::Connection<W> {
         &self.conn
-    }
-
-    pub(super) fn config(&self) -> Arc<DatabaseConfig> {
-        self.config_store.get()
     }
 
     pub(super) async fn run_async<B: QueryResultBuilder>(
@@ -391,7 +386,6 @@ mod test {
     use tokio::task::JoinSet;
     use tokio::time::Instant;
 
-    use crate::auth::Authenticated;
     use crate::connection::legacy::MakeLegacyConnection;
     use crate::connection::{Connection as _, RequestContext, TXN_TIMEOUT};
     use crate::namespace::meta_store::{metastore_connection_maker, MetaStore};
@@ -641,7 +635,6 @@ mod test {
         let conn = make_conn.make_connection().await.unwrap();
         let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
         let ctx = RequestContext::new(
-            Authenticated::FullAccess,
             NamespaceName::default(),
             MetaStore::new(
                 Default::default(),

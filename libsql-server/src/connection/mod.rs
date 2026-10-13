@@ -8,7 +8,6 @@ use futures::Future;
 use tokio::{sync::Semaphore, time::timeout};
 use tonic::metadata::BinaryMetadataValue;
 
-use crate::auth::Authenticated;
 use crate::error::Error;
 use crate::http::user::timing::sample_time;
 use crate::metrics::{
@@ -40,17 +39,14 @@ const TXN_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct RequestContext {
-    /// Authentication for this request
-    auth: Authenticated,
     /// current namespace
     namespace: NamespaceName,
     meta_store: MetaStore,
 }
 
 impl RequestContext {
-    pub fn new(auth: Authenticated, namespace: NamespaceName, meta_store: MetaStore) -> Self {
+    pub fn new(namespace: NamespaceName, meta_store: MetaStore) -> Self {
         Self {
-            auth,
             namespace,
             meta_store,
         }
@@ -60,15 +56,10 @@ impl RequestContext {
         let namespace = BinaryMetadataValue::from_bytes(self.namespace.as_slice());
         req.metadata_mut()
             .insert_bin(NAMESPACE_METADATA_KEY, namespace);
-        self.auth.upgrade_grpc_request(req);
     }
 
     pub fn namespace(&self) -> &NamespaceName {
         &self.namespace
-    }
-
-    pub fn auth(&self) -> &Authenticated {
-        &self.auth
     }
 }
 

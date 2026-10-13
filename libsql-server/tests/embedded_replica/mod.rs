@@ -6,15 +6,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::common::auth::encode;
 use crate::common::http::Client;
 use crate::common::net::{init_tracing, SimServer, TestServer, TurmoilAcceptor, TurmoilConnector};
-use crate::common::{self, snapshot_metrics};
+use crate::common::snapshot_metrics;
 use libsql::Database;
-use libsql_server::auth::{user_auth_strategies, Auth};
-use libsql_server::config::{
-    AdminApiConfig, DbConfig, RpcClientConfig, RpcServerConfig, UserApiConfig,
-};
+use libsql_server::config::{AdminApiConfig, DbConfig, RpcServerConfig, UserApiConfig};
 use serde_json::json;
 use tempfile::tempdir;
 use tokio::sync::Notify;
@@ -52,10 +48,9 @@ fn make_primary(sim: &mut Sim, path: PathBuf) {
                     ..Default::default()
                 },
                 admin_api_config: Some(AdminApiConfig {
-                    acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
                     connector: TurmoilConnector,
                     disable_metrics: false,
-                    auth_key: None,
+                    auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
                     acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await?,
@@ -89,7 +84,7 @@ fn embedded_replica() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -138,7 +133,8 @@ fn embedded_replica() {
             }
         }
 
-        snapshot.assert_counter("libsql_server_user_http_response", 6);
+        // the admin API is on the same port: its responses are counted too, as http ones
+        snapshot.assert_counter_label("libsql_server_user_http_response", ("protocol", "grpc"), 6);
 
         Ok(())
     });
@@ -162,7 +158,7 @@ fn execute_batch() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -217,7 +213,7 @@ fn stream() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -292,7 +288,7 @@ fn embedded_replica_with_encryption() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -344,7 +340,8 @@ fn embedded_replica_with_encryption() {
             }
         }
 
-        snapshot.assert_counter("libsql_server_user_http_response", 6);
+        // the admin API is on the same port: its responses are counted too, as http ones
+        snapshot.assert_counter_label("libsql_server_user_http_response", ("protocol", "grpc"), 6);
 
         conn.execute("INSERT INTO user(id) VALUES (1)", ())
             .await
@@ -406,10 +403,9 @@ fn replica_primary_reset() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await.unwrap(),
@@ -474,7 +470,7 @@ fn replica_primary_reset() {
         .unwrap();
         let replica_index = replica.sync().await.unwrap().frame_no().unwrap();
         let primary_index = Client::new()
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -533,7 +529,7 @@ fn replica_primary_reset() {
         .unwrap();
         let replica_index = replica.sync().await.unwrap().frame_no().unwrap();
         let primary_index = Client::new()
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await
             .unwrap()
             .json_value()
@@ -691,10 +687,9 @@ fn replicate_with_snapshots() {
                     ..Default::default()
                 },
                 admin_api_config: Some(AdminApiConfig {
-                    acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                     connector: TurmoilConnector,
                     disable_metrics: true,
-                    auth_key: None,
+                    auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
                     acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await.unwrap(),
@@ -711,7 +706,7 @@ fn replicate_with_snapshots() {
     sim.client("client", async {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let db = Database::open_remote_with_connector("http://primary:8080", "", TurmoilConnector)
@@ -756,7 +751,7 @@ fn replicate_with_snapshots() {
         );
 
         let stats = client
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await?
             .json_value()
             .await
@@ -789,7 +784,7 @@ fn replicate_with_snapshots() {
         );
 
         let stats = client
-            .get("http://primary:9090/v1/namespaces/default/stats")
+            .get("http://primary:8080/v1/namespaces/default/stats")
             .await?
             .json_value()
             .await
@@ -825,7 +820,7 @@ fn read_your_writes() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -870,7 +865,7 @@ fn proxy_write_returning_row() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -917,7 +912,7 @@ fn freeze() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -990,7 +985,7 @@ fn sync_interval() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -1042,7 +1037,7 @@ fn errors_on_bad_replica() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -1116,7 +1111,7 @@ fn malformed_database() {
     sim.client("client", async move {
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let path = tmp_embedded_path.join("embedded");
@@ -1170,7 +1165,7 @@ fn txn_bug_issue_1283() {
 
         let client = Client::new();
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let db_url = "http://foo.primary:8080";
@@ -1266,10 +1261,9 @@ fn replicated_return() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await.unwrap(),
@@ -1372,154 +1366,6 @@ fn replicated_return() {
 }
 
 #[test]
-fn replicate_auth() {
-    init_tracing();
-    let mut sim = Builder::new()
-        .simulation_duration(Duration::from_secs(1000))
-        .build();
-
-    let (encoding, decoding) = common::auth::key_pair();
-    sim.host("primary", {
-        let decoding = decoding.clone();
-        move || {
-            let decoding = decoding.clone();
-            async move {
-                let tmp = tempdir()?;
-                let jwt_keys =
-                    vec![jsonwebtoken::DecodingKey::from_ed_components(&decoding).unwrap()];
-                let auth = Auth::new(user_auth_strategies::Jwt::new(jwt_keys));
-                let server = TestServer {
-                    path: tmp.path().to_owned().into(),
-                    user_api_config: UserApiConfig {
-                        hrana_ws_acceptor: None,
-                        auth_strategy: auth,
-                        ..Default::default()
-                    },
-                    admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
-                        connector: TurmoilConnector,
-                        disable_metrics: true,
-                        auth_key: None,
-                    }),
-                    rpc_server_config: Some(RpcServerConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await?,
-                        tls_config: None,
-                    }),
-                    ..Default::default()
-                };
-
-                server.start_sim(8080).await?;
-
-                Ok(())
-            }
-        }
-    });
-
-    sim.host("replica", {
-        let decoding = decoding.clone();
-        move || {
-            let decoding = decoding.clone();
-            async move {
-                let tmp = tempdir()?;
-                let jwt_keys =
-                    vec![jsonwebtoken::DecodingKey::from_ed_components(&decoding).unwrap()];
-                let auth = Auth::new(user_auth_strategies::Jwt::new(jwt_keys));
-                let server = TestServer {
-                    path: tmp.path().to_owned().into(),
-                    user_api_config: UserApiConfig {
-                        hrana_ws_acceptor: None,
-                        auth_strategy: auth,
-                        ..Default::default()
-                    },
-                    admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await?,
-                        connector: TurmoilConnector,
-                        disable_metrics: true,
-                        auth_key: None,
-                    }),
-                    rpc_client_config: Some(RpcClientConfig {
-                        remote_url: "http://primary:4567".into(),
-                        connector: TurmoilConnector,
-                        tls_config: None,
-                    }),
-                    ..Default::default()
-                };
-
-                server.start_sim(8080).await?;
-
-                Ok(())
-            }
-        }
-    });
-
-    sim.client("client", async move {
-        let token = encode(
-            &serde_json::json!({
-                "id": "default",
-            }),
-            &encoding,
-        );
-
-        // no auth
-        let tmp = tempdir().unwrap();
-        let db = Database::open_with_remote_sync_connector(
-            tmp.path().join("embedded").to_str().unwrap(),
-            "http://primary:8080",
-            "",
-            TurmoilConnector,
-            false,
-            None,
-        )
-        .await?;
-
-        assert!(db.sync().await.is_err());
-
-        let tmp = tempdir().unwrap();
-        let db = Database::open_with_remote_sync_connector(
-            tmp.path().join("embedded").to_str().unwrap(),
-            "http://replica:8080",
-            "",
-            TurmoilConnector,
-            false,
-            None,
-        )
-        .await?;
-
-        assert!(db.sync().await.is_err());
-
-        // auth
-        let tmp = tempdir().unwrap();
-        let db = Database::open_with_remote_sync_connector(
-            tmp.path().join("embedded").to_str().unwrap(),
-            "http://primary:8080",
-            token.clone(),
-            TurmoilConnector,
-            false,
-            None,
-        )
-        .await?;
-
-        assert!(db.sync().await.is_ok());
-
-        let tmp = tempdir().unwrap();
-        let db = Database::open_with_remote_sync_connector(
-            tmp.path().join("embedded").to_str().unwrap(),
-            "http://replica:8080",
-            token.clone(),
-            TurmoilConnector,
-            false,
-            None,
-        )
-        .await?;
-
-        assert!(db.sync().await.is_ok());
-        Ok(())
-    });
-
-    sim.run().unwrap();
-}
-
-#[test]
 fn replicated_synced_frames_zero_when_no_data_synced() {
     let tmp_embedded = tempdir().unwrap();
     let tmp_embedded_path = tmp_embedded.path().to_owned();
@@ -1544,10 +1390,9 @@ fn replicated_synced_frames_zero_when_no_data_synced() {
                         ..Default::default()
                     },
                     admin_api_config: Some(AdminApiConfig {
-                        acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 9090)).await.unwrap(),
                         connector: TurmoilConnector,
                         disable_metrics: true,
-                        auth_key: None,
+                        auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
                         acceptor: TurmoilAcceptor::bind(([0, 0, 0, 0], 4567)).await.unwrap(),
@@ -1656,7 +1501,7 @@ fn schema_db() {
 
         assert!(http
             .post(
-                "http://primary:9090/v1/namespaces/schema/create",
+                "http://primary:8080/v1/namespaces/schema/create",
                 json!({ "shared_schema": true })
             )
             .await
@@ -1665,7 +1510,7 @@ fn schema_db() {
             .is_success());
         assert!(http
             .post(
-                "http://primary:9090/v1/namespaces/foo/create",
+                "http://primary:8080/v1/namespaces/foo/create",
                 json!({ "shared_schema_name": "schema" })
             )
             .await
@@ -1712,7 +1557,7 @@ fn remote_namespace_header_support() {
         let client = Client::new();
 
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let db_url = "http://primary:8080";
@@ -1755,7 +1600,7 @@ fn remote_replica_namespace_header_support() {
         let client = Client::new();
 
         client
-            .post("http://primary:9090/v1/namespaces/foo/create", json!({}))
+            .post("http://primary:8080/v1/namespaces/foo/create", json!({}))
             .await?;
 
         let db_url = "http://primary:8080";
