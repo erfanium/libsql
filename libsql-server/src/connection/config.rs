@@ -22,8 +22,6 @@ pub struct DatabaseConfig {
     pub heartbeat_url: Option<Url>,
     pub bottomless_db_id: Option<String>,
     #[serde(default)]
-    pub jwt_key: Option<String>,
-    #[serde(default)]
     pub txn_timeout: Option<Duration>,
     #[serde(default)]
     pub allow_attach: bool,
@@ -54,7 +52,6 @@ impl Default for DatabaseConfig {
             max_db_pages: default_max_size(),
             heartbeat_url: None,
             bottomless_db_id: None,
-            jwt_key: None,
             txn_timeout: Some(TXN_TIMEOUT),
             allow_attach: false,
             max_row_size: default_max_row_size(),
@@ -74,7 +71,6 @@ impl From<&metadata::DatabaseConfig> for DatabaseConfig {
             max_db_pages: value.max_db_pages,
             heartbeat_url: value.heartbeat_url.as_ref().map(|s| Url::parse(s).unwrap()),
             bottomless_db_id: value.bottomless_db_id.clone(),
-            jwt_key: value.jwt_key.clone(),
             txn_timeout: value.txn_timeout_s.map(Duration::from_secs),
             allow_attach: value.allow_attach,
             max_row_size: value.max_row_size.unwrap_or_else(default_max_row_size),
@@ -101,7 +97,6 @@ impl From<&DatabaseConfig> for metadata::DatabaseConfig {
             max_db_pages: value.max_db_pages,
             heartbeat_url: value.heartbeat_url.as_ref().map(|s| s.to_string()),
             bottomless_db_id: value.bottomless_db_id.clone(),
-            jwt_key: value.jwt_key.clone(),
             txn_timeout_s: value.txn_timeout.map(|d| d.as_secs()),
             allow_attach: value.allow_attach,
             max_row_size: Some(value.max_row_size),

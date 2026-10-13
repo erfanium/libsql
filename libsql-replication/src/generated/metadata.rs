@@ -18,8 +18,6 @@ pub struct DatabaseConfig {
     pub heartbeat_url: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "6")]
     pub bottomless_db_id: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "7")]
-    pub jwt_key: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(uint64, optional, tag = "8")]
     pub txn_timeout_s: ::core::option::Option<u64>,
     #[prost(bool, tag = "9")]
