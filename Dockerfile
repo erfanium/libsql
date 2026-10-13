@@ -1,5 +1,5 @@
 # build sqld
-FROM rust:slim-bullseye AS chef
+FROM rust:slim-bookworm AS chef
 RUN apt update \
     && apt install -y libclang-dev clang \
         build-essential tcl protobuf-compiler file \
@@ -38,7 +38,7 @@ RUN if [ "$ENABLE_FEATURES" == "" ]; then \
     fi
 
 # official gosu install instruction (https://github.com/tianon/gosu/blob/master/INSTALL.md)
-FROM debian:bullseye-slim as gosu
+FROM debian:bookworm-slim as gosu
 ENV GOSU_VERSION 1.17
 RUN set -eux; \
 # save list of currently installed packages for later so we can clean up
@@ -69,7 +69,7 @@ RUN set -eux; \
 	gosu nobody true
 
 # runtime
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 RUN apt update
 
 EXPOSE 3000

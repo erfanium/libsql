@@ -3,6 +3,7 @@ mod dump;
 mod extract;
 mod listen;
 pub(crate) mod result_builder;
+mod sync;
 mod trace;
 pub(crate) mod types;
 #[macro_use]
@@ -46,6 +47,7 @@ use crate::query::{self, Query};
 use crate::query_analysis::{predict_final_state, Statement, TxnStatus};
 use crate::query_result_builder::QueryResultBuilder;
 use crate::rpc::proxy::rpc::proxy_server::{Proxy, ProxyServer};
+use crate::rpc::replication::replication_log::ReplicationLogService;
 use crate::schema::{MigrationDetails, MigrationSummary};
 use crate::utils::services::idle_shutdown::IdleShutdownKicker;
 use crate::{hrana, TaskManager};
@@ -250,6 +252,15 @@ where
         if let Some(acceptor) = self.http_acceptor {
             crate::http::admin::init_metrics();
 
+            // a replica has no log to serve: its sync requests fail with "not a primary"
+            let sync_service = Arc::new(ReplicationLogService::new(
+                self.namespaces.clone(),
+                self.idle_shutdown_kicker.clone(),
+                self.disable_namespaces,
+                true,
+                false,
+            ));
+
             let state = AppState {
                 hrana_http_srv: hrana_http_srv.clone(),
                 enable_console: self.enable_console,
@@ -342,6 +353,10 @@ where
                 .route("/v1/jobs", get(handle_get_migrations))
                 .route("/v1/jobs/:job_id", get(handle_get_migration_details))
                 .layer(middleware::from_fn(timings_middleware))
+                .route(
+                    "/sync",
+                    get(move |query, req| sync::handle_sync(sync_service.clone(), query, req)),
+                )
                 .merge(crate::http::admin::api::platform_routes())
                 .merge(crate::http::admin::admin_routes(state.admin_api_key.clone()))
                 .merge(crate::http::admin::openapi::docs_routes())

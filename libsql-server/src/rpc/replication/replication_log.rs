@@ -10,9 +10,10 @@ use futures_core::Future;
 pub use libsql_replication::rpc::replication as rpc;
 use libsql_replication::rpc::replication::log_offset::WalFlavor;
 use libsql_replication::rpc::replication::replication_log_server::ReplicationLog;
+use libsql_replication::rpc::replication::sync_response::Message as SyncMessage;
 use libsql_replication::rpc::replication::{
-    Frame, Frames, HelloRequest, HelloResponse, LogOffset, NAMESPACE_DOESNT_EXIST,
-    NEED_SNAPSHOT_ERROR_MSG, NO_HELLO_ERROR_MSG, SESSION_TOKEN_KEY,
+    Frame, Frames, HelloRequest, HelloResponse, LogOffset, SyncResponse, SyncTrailer,
+    NAMESPACE_DOESNT_EXIST, NEED_SNAPSHOT_ERROR_MSG, NO_HELLO_ERROR_MSG, SESSION_TOKEN_KEY,
 };
 use md5::{Digest, Md5};
 use tokio_stream::StreamExt as _;
@@ -166,6 +167,127 @@ impl ReplicationLogService {
         let num = sha.finalize();
         let num = u128::from_le_bytes(num.into());
         Uuid::from_u128(num)
+    }
+}
+
+/// The frames of the replica are not the first ones of the primary's log
+pub const LOG_MISMATCH: &str = "LOG_MISMATCH";
+
+pub struct Sync {
+    /// about how many frames `messages` has: only good for showing progress
+    pub estimated_frame_count: u64,
+    pub messages: BoxStream<'static, Result<SyncResponse, Status>>,
+}
+
+/// What a replica holds: the query string of a sync request
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SyncQuery {
+    /// first frame the replica is missing
+    #[serde(default)]
+    pub next_offset: u64,
+    /// id of the log the replica's frames come from, empty when it has none
+    #[serde(default)]
+    pub log_id: String,
+}
+
+impl ReplicationLogService {
+    /// The frames that bring a replica to the primary's current index, then the trailer, in one
+    /// response. Needs no session token.
+    pub async fn sync(&self, req: tonic::Request<SyncQuery>) -> Result<Sync, Status> {
+        let namespace = super::super::extract_namespace(self.disable_namespaces, &req)?;
+        self.authenticate(&req, namespace.clone()).await?;
+
+        let (logger, config, _, stats, _) = self
+            .logger_from_namespace(namespace.clone(), &req, false)
+            .await?;
+
+        if config.is_shared_schema && !self.service_internal {
+            return Err(tonic::Status::failed_precondition(
+                "cannot replicate a shared schema db",
+            ));
+        }
+
+        let stats = if self.collect_stats {
+            Some(stats)
+        } else {
+            None
+        };
+
+        let req = req.into_inner();
+
+        let log_id = logger.log_id().to_string();
+        // first frame that the log does not have yet
+        let log_end = (*logger.new_frame_notifier.borrow()).map_or(0, |frame_no| frame_no + 1);
+        // a replica without a log is cloned. One that holds frames this log cannot continue
+        // (other log, or it is ahead of the primary) is refused: it is its own to discard them
+        let clone = req.log_id.is_empty();
+        if !clone && (req.log_id != log_id || req.next_offset > log_end) {
+            return Err(Status::aborted(LOG_MISMATCH));
+        }
+        let mut offset = if clone { 0 } else { req.next_offset };
+
+        // frames before the log's first one were compacted: they are served from the snapshots
+        // that hold them, the rest from the log. A log never compacted has no snapshot directory
+        let log_start = logger.log_file.read().header().start_frame_no.get();
+        let mut snapshots = Vec::new();
+        let mut estimated_frame_count = 0;
+        while offset < log_start {
+            let snapshot = logger
+                .get_snapshot_file(offset)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            let Some(snapshot) = snapshot else { break };
+            let header = snapshot.header();
+            estimated_frame_count += header.frame_count.get();
+            let snapshot_end = header.end_frame_no.get() + 1;
+            snapshots.push((snapshot, offset));
+            offset = snapshot_end;
+        }
+        estimated_frame_count += log_end.saturating_sub(offset);
+
+        let log = StreamGuard::new(
+            FrameStream::new_with_namespace(
+                logger,
+                offset,
+                false,
+                None,
+                stats.clone(),
+                Some(namespace),
+            )
+            .map_err(|e| Status::internal(e.to_string()))?,
+            self.idle_shutdown_layer.clone(),
+        )
+        .map(map_frame_stream_output);
+
+        let frame = |frame: Frame| SyncResponse {
+            message: Some(SyncMessage::Frame(frame.data)),
+        };
+        let stream = async_stream::try_stream! {
+            for (snapshot, from) in snapshots {
+                let frames = snapshot_stream::make_snapshot_stream(snapshot, from, stats.clone());
+                tokio::pin!(frames);
+                while let Some(next) = frames.next().await {
+                    yield frame(next?);
+                }
+            }
+
+            // the log is read past the index seen above, up to what is committed by now
+            let mut next_offset = offset;
+            tokio::pin!(log);
+            while let Some(next) = log.next().await {
+                yield frame(next?);
+                next_offset += 1;
+            }
+
+            yield SyncResponse {
+                message: Some(SyncMessage::Trailer(SyncTrailer { log_id, next_offset })),
+            };
+        };
+
+        Ok(Sync {
+            estimated_frame_count,
+            messages: Box::pin(stream),
+        })
     }
 }
 
