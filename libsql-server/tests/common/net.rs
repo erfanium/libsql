@@ -164,9 +164,7 @@ impl SimServer for TestServer {
         self.user_api_config.http_acceptor = Some(user_api);
 
         // Disable prom metrics since we already created our recorder.
-        if let Some(admin_api) = &mut self.admin_api_config {
-            admin_api.disable_metrics = true;
-        }
+        self.user_api_config.disable_metrics = true;
 
         self.start().await?;
 

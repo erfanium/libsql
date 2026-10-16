@@ -224,6 +224,7 @@ pub struct UserApi<A, P, S, C> {
     pub enable_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
+    pub disable_metrics: bool,
     /// The admin API is served next to the user API when it is configured
     pub admin_api_config: Option<AdminApiConfig<C>>,
     pub set_log_level: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static>>,
@@ -354,14 +355,14 @@ where
                         sync::handle_sync(sync_service.clone(), state, headers, query)
                     }),
                 )
-                .with_state(state);
+                .with_state(state)
+                .merge(crate::http::metrics::router(self.disable_metrics));
 
             let app = match self.admin_api_config {
                 Some(config) => app.merge(crate::http::admin::router(
                     hrana_http_srv.clone(),
                     self.namespaces.clone(),
                     config.connector,
-                    config.disable_metrics,
                     config.auth_key.into(),
                     self.set_log_level,
                 )),

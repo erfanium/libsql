@@ -388,6 +388,7 @@ async fn make_user_api_config(config: &Cli) -> anyhow::Result<UserApiConfig> {
         enable_http_console: config.enable_http_console,
         self_url: config.http_self_url.clone(),
         primary_url: config.http_primary_url.clone(),
+        disable_metrics: config.disable_metrics,
     })
 }
 
@@ -401,7 +402,6 @@ fn make_admin_api_config(config: &Cli) -> Option<AdminApiConfig> {
 
     Some(AdminApiConfig {
         connector,
-        disable_metrics: config.disable_metrics,
         auth_key,
     })
 }

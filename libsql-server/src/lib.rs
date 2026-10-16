@@ -276,6 +276,7 @@ where
             enable_console: self.user_api_config.enable_http_console,
             self_url: self.user_api_config.self_url,
             primary_url: self.user_api_config.primary_url,
+            disable_metrics: self.user_api_config.disable_metrics,
             admin_api_config: self.admin_api_config,
             set_log_level: self.set_log_level,
         };

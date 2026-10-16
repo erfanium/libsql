@@ -49,7 +49,6 @@ fn make_primary(sim: &mut Sim, path: PathBuf) {
                 },
                 admin_api_config: Some(AdminApiConfig {
                     connector: TurmoilConnector,
-                    disable_metrics: false,
                     auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
@@ -404,7 +403,6 @@ fn replica_primary_reset() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
@@ -688,7 +686,6 @@ fn replicate_with_snapshots() {
                 },
                 admin_api_config: Some(AdminApiConfig {
                     connector: TurmoilConnector,
-                    disable_metrics: true,
                     auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
@@ -1262,7 +1259,6 @@ fn replicated_return() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
@@ -1391,7 +1387,6 @@ fn replicated_synced_frames_zero_when_no_data_synced() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {

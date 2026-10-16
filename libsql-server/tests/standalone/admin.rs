@@ -26,7 +26,6 @@ fn admin_auth() {
             },
             admin_api_config: Some(AdminApiConfig {
                 connector: TurmoilConnector,
-                disable_metrics: true,
                 auth_key: "secretkey".into(),
             }),
             disable_namespaces: false,
@@ -97,14 +96,13 @@ fn no_admin_api_without_key() {
                 .status(),
             StatusCode::NOT_FOUND
         );
-        assert_eq!(
-            client
-                .get("http://primary:8080/metrics")
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NOT_FOUND
-        );
+        // metrics are not part of the admin API
+        assert!(client
+            .get("http://primary:8080/metrics")
+            .await
+            .unwrap()
+            .status()
+            .is_success());
 
         Ok(())
     });

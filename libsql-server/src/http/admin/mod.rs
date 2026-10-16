@@ -1,15 +1,12 @@
 use axum::body::StreamBody;
-use axum::extract::{FromRef, Path, State};
+use axum::extract::{Path, State};
 use axum::middleware::Next;
 use axum::routing::delete;
 use axum::Json;
 use chrono::NaiveDateTime;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use hyper::{Body, Request, StatusCode};
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::cell::OnceCell;
 use std::convert::Infallible;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -31,32 +28,12 @@ use crate::LIBSQL_PAGE_SIZE;
 pub mod openapi;
 pub mod stats;
 
-#[derive(Clone)]
-struct Metrics {
-    handle: Option<PrometheusHandle>,
-}
-
-impl Metrics {
-    fn render(&self) -> String {
-        self.handle.as_ref().map(|h| h.render()).unwrap_or_default()
-    }
-}
-
 struct AppState<C> {
     namespaces: NamespaceStore,
     user_http_server: Arc<hrana::http::Server>,
     connector: C,
-    metrics: Metrics,
     set_env_filter: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Sync + Send + 'static>>,
 }
-
-impl<C> FromRef<Arc<AppState<C>>> for Metrics {
-    fn from_ref(input: &Arc<AppState<C>>) -> Self {
-        input.metrics.clone()
-    }
-}
-
-static PROM_HANDLE: Mutex<OnceCell<PrometheusHandle>> = Mutex::new(OnceCell::new());
 
 /// The admin API, served on the same port as the user API: every route of it wants the admin
 /// key as a bearer token.
@@ -64,80 +41,19 @@ pub fn router<C>(
     user_http_server: Arc<hrana::http::Server>,
     namespaces: NamespaceStore,
     connector: C,
-    disable_metrics: bool,
     auth: Arc<str>,
     set_env_filter: Option<Box<dyn Fn(&str) -> anyhow::Result<()> + Sync + Send + 'static>>,
 ) -> axum::Router
 where
     C: Connector,
 {
-    let app_label = std::env::var("SQLD_APP_LABEL").ok();
-    let ver = env!("CARGO_PKG_VERSION");
-
-    let prom_handle = if !disable_metrics {
-        let lock = PROM_HANDLE.lock();
-        let prom_handle = lock.get_or_init(|| {
-            tracing::info!("initializing prometheus metrics");
-            let b = PrometheusBuilder::new().idle_timeout(
-                metrics_util::MetricKindMask::ALL,
-                Some(Duration::from_secs(120)),
-            );
-
-            if let Some(app_label) = app_label {
-                b.add_global_label("app", app_label)
-                    .add_global_label("version", ver)
-                    .install_recorder()
-                    .unwrap()
-            } else {
-                b.install_recorder().unwrap()
-            }
-        });
-
-        tokio::task::spawn(async move {
-            loop {
-                let runtime = tokio::runtime::Handle::current();
-                let metrics = runtime.metrics();
-                crate::metrics::TOKIO_RUNTIME_BLOCKING_QUEUE_DEPTH
-                    .set(metrics.blocking_queue_depth() as f64);
-                crate::metrics::TOKIO_RUNTIME_INJECTION_QUEUE_DEPTH
-                    .set(metrics.injection_queue_depth() as f64);
-                crate::metrics::TOKIO_RUNTIME_NUM_BLOCKING_THREADS
-                    .set(metrics.num_blocking_threads() as f64);
-                crate::metrics::TOKIO_RUNTIME_NUM_IDLE_BLOCKING_THREADS
-                    .set(metrics.num_idle_blocking_threads() as f64);
-                crate::metrics::TOKIO_RUNTIME_NUM_WORKERS.set(metrics.num_workers() as f64);
-
-                crate::metrics::TOKIO_RUNTIME_IO_DRIVER_FD_DEREGISTERED_COUNT
-                    .absolute(metrics.io_driver_fd_deregistered_count() as u64);
-                crate::metrics::TOKIO_RUNTIME_IO_DRIVER_FD_REGISTERED_COUNT
-                    .absolute(metrics.io_driver_fd_registered_count() as u64);
-                crate::metrics::TOKIO_RUNTIME_IO_DRIVER_READY_COUNT
-                    .absolute(metrics.io_driver_ready_count() as u64);
-                crate::metrics::TOKIO_RUNTIME_REMOTE_SCHEDULE_COUNT
-                    .absolute(metrics.remote_schedule_count() as u64);
-
-                crate::metrics::SERVER_COUNT.set(1.0);
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        });
-
-        Some(prom_handle.clone())
-    } else {
-        None
-    };
-
     fn trace_request<B>(req: &Request<B>, span: &tracing::Span) {
         let _s = span.enter();
 
         tracing::debug!("{} {} {:?}", req.method(), req.uri(), req.headers());
     }
 
-    metrics::increment_counter!("libsql_server_count");
-
     use axum::routing::{get, post};
-    let metrics = Metrics {
-        handle: prom_handle,
-    };
     let router = axum::Router::new()
         .route(
             "/v1/namespaces/:namespace/config",
@@ -163,7 +79,6 @@ where
         .route("/v1/namespaces/:namespace", delete(handle_delete_namespace))
         .route("/v1/namespaces/:namespace/stats", get(stats::handle_stats))
         .route("/v1/diagnostics", get(handle_diagnostics))
-        .route("/metrics", get(handle_metrics))
         .route("/profile/heap/enable", post(enable_profile_heap))
         .route("/profile/heap/disable/:id", post(disable_profile_heap))
         .route("/profile/heap/:id", delete(delete_profile_heap))
@@ -172,7 +87,6 @@ where
             namespaces: namespaces.clone(),
             connector,
             user_http_server,
-            metrics,
             set_env_filter,
         }))
         .layer(
@@ -209,18 +123,6 @@ async fn auth_middleware<B>(
     }
 
     Ok(next.run(request).await)
-}
-
-#[utoipa::path(
-    get,
-    path = "/metrics",
-    tag = "server",
-    summary = "Prometheus metrics",
-    responses((status = 200, body = String, content_type = "text/plain")),
-    security(("admin_key" = [])),
-)]
-async fn handle_metrics(State(metrics): State<Metrics>) -> String {
-    metrics.render()
 }
 
 #[utoipa::path(

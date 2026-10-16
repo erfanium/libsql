@@ -103,6 +103,7 @@ async fn configure_server(
             enable_http_console: false,
             self_url: None,
             primary_url: None,
+            disable_metrics: true,
         },
         path: path.into().into(),
         disable_default_namespace: false,

@@ -31,7 +31,6 @@ async fn make_standalone_server() -> Result<(), Box<dyn std::error::Error>> {
         },
         admin_api_config: Some(AdminApiConfig {
             connector: TurmoilConnector,
-            disable_metrics: true,
             auth_key: crate::common::ADMIN_KEY.into(),
         }),
         disable_namespaces: false,
@@ -352,7 +351,6 @@ fn dirty_startup_dont_prevent_namespace_creation() {
             },
             admin_api_config: Some(AdminApiConfig {
                 connector: TurmoilConnector,
-                disable_metrics: true,
                 auth_key: crate::common::ADMIN_KEY.into(),
             }),
             disable_default_namespace: true,

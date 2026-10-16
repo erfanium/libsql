@@ -32,7 +32,6 @@ fn replica_restart() {
                 },
                 admin_api_config: Some(AdminApiConfig {
                     connector: TurmoilConnector,
-                    disable_metrics: true,
                     auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
@@ -65,7 +64,6 @@ fn replica_restart() {
                         },
                         admin_api_config: Some(AdminApiConfig {
                             connector: TurmoilConnector,
-                            disable_metrics: true,
                             auth_key: crate::common::ADMIN_KEY.into(),
                         }),
                         rpc_client_config: Some(RpcClientConfig {
@@ -185,7 +183,6 @@ fn primary_regenerate_log_no_replica_restart() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
@@ -239,7 +236,6 @@ fn primary_regenerate_log_no_replica_restart() {
                         },
                         admin_api_config: Some(AdminApiConfig {
                             connector: TurmoilConnector,
-                            disable_metrics: true,
                             auth_key: crate::common::ADMIN_KEY.into(),
                         }),
                         rpc_client_config: Some(RpcClientConfig {
@@ -363,7 +359,6 @@ fn primary_regenerate_log_with_replica_restart() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
@@ -419,7 +414,6 @@ fn primary_regenerate_log_with_replica_restart() {
                         },
                         admin_api_config: Some(AdminApiConfig {
                             connector: TurmoilConnector,
-                            disable_metrics: true,
                             auth_key: crate::common::ADMIN_KEY.into(),
                         }),
                         rpc_client_config: Some(RpcClientConfig {

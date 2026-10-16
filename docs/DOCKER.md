@@ -66,10 +66,11 @@ docker run --name some-sqld -ti \
 
 ### `ADMIN_KEY`
 
-The key of the admin API: the namespace management routes (`/v1/namespaces/*`),
-`/v1/diagnostics` and `/metrics`. They are served on the HTTP port, to requests
-that carry the key as a bearer token (`Authorization: Bearer <key>`). If the key
-is unset, there is no admin API.
+The key of the admin API: the namespace management routes (`/v1/namespaces/*`)
+and `/v1/diagnostics`. They are served on the HTTP port, to requests that carry
+the key as a bearer token (`Authorization: Bearer <key>`). If the key is unset,
+there is no admin API. `/metrics` is not part of it: it is served to anyone,
+with or without the key.
 
 The server does not authenticate the users of its databases: it is meant to be
 reachable only by a backend that does, and that names the namespace of each

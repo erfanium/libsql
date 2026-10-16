@@ -32,7 +32,6 @@ pub fn make_cluster(sim: &mut Sim, num_replica: usize, disable_namespaces: bool)
                 },
                 admin_api_config: Some(AdminApiConfig {
                     connector: TurmoilConnector,
-                    disable_metrics: true,
                     auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_server_config: Some(RpcServerConfig {
@@ -62,7 +61,6 @@ pub fn make_cluster(sim: &mut Sim, num_replica: usize, disable_namespaces: bool)
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_client_config: Some(RpcClientConfig {

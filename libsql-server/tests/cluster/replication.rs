@@ -38,7 +38,6 @@ fn apply_partial_snapshot() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
@@ -69,7 +68,6 @@ fn apply_partial_snapshot() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_client_config: Some(RpcClientConfig {
@@ -165,7 +163,6 @@ fn replica_lazy_creation() {
                     },
                     admin_api_config: Some(AdminApiConfig {
                         connector: TurmoilConnector,
-                        disable_metrics: true,
                         auth_key: crate::common::ADMIN_KEY.into(),
                     }),
                     rpc_server_config: Some(RpcServerConfig {
@@ -195,7 +192,6 @@ fn replica_lazy_creation() {
                 },
                 admin_api_config: Some(AdminApiConfig {
                     connector: TurmoilConnector,
-                    disable_metrics: true,
                     auth_key: crate::common::ADMIN_KEY.into(),
                 }),
                 rpc_client_config: Some(RpcClientConfig {

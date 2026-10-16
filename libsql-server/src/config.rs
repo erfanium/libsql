@@ -61,6 +61,7 @@ pub struct UserApiConfig<A = AddrIncoming> {
     pub enable_http_console: bool,
     pub self_url: Option<String>,
     pub primary_url: Option<String>,
+    pub disable_metrics: bool,
 }
 
 impl<A> Default for UserApiConfig<A> {
@@ -70,6 +71,7 @@ impl<A> Default for UserApiConfig<A> {
             enable_http_console: Default::default(),
             self_url: Default::default(),
             primary_url: Default::default(),
+            disable_metrics: Default::default(),
         }
     }
 }
@@ -77,7 +79,6 @@ impl<A> Default for UserApiConfig<A> {
 /// The admin API is served on the port of the user API, behind `auth_key`.
 pub struct AdminApiConfig<C = HttpsConnector<HttpConnector>> {
     pub connector: C,
-    pub disable_metrics: bool,
     pub auth_key: String,
 }
 

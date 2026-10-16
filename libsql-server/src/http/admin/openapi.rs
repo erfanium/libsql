@@ -29,7 +29,6 @@ use super::{stats, CreateNamespaceReq, HttpDatabaseConfig};
         super::handle_replication,
         stats::handle_stats,
         super::handle_diagnostics,
-        super::handle_metrics,
         super::handle_set_log_filter,
         super::enable_profile_heap,
         super::disable_profile_heap,
@@ -108,7 +107,6 @@ mod tests {
             "/v1/namespaces/{namespace}/replication",
             "/v1/namespaces/{namespace}/stats",
             "/v1/diagnostics",
-            "/metrics",
             "/log-filter",
         ] {
             assert!(paths.contains_key(path), "{path} is not documented");
