@@ -162,7 +162,7 @@ where
                 let upgraded_io = match hyper::upgrade::on(&mut req).await {
                     Ok(io) => io,
                     Err(e) => {
-                        tracing::error!("Failed to upgrade h2c connection: {}", e);
+                        tracing::warn!("Failed to upgrade h2c connection: {}", e);
                         return;
                     }
                 };
@@ -180,7 +180,7 @@ where
                     )
                     .await
                 {
-                    tracing::error!("http2 connection error: {}", e);
+                    tracing::warn!("http2 connection error: {}", e);
                 }
             });
 

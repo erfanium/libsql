@@ -267,7 +267,7 @@ impl RemoteConnection {
                 Ok(i) => i.into_inner(),
                 Err(e) => {
                     if e.code() == Code::Unavailable {
-                        tracing::error!("retrying proxy connection: {}", e);
+                        tracing::warn!("retrying proxy connection: {}", e);
                         tokio::time::sleep(Duration::from_millis(500) * 2u32.pow(retries)).await;
                         retries += 1;
                         continue;

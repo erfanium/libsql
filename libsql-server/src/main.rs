@@ -572,7 +572,7 @@ async fn build_server(
 
                 // the graceful shutdown can take long: a second signal does not wait for it
                 if shutting_down {
-                    tracing::error!("second shutdown signal received, exiting now");
+                    tracing::warn!("second shutdown signal received, exiting now");
                     std::process::exit(1);
                 }
                 shutting_down = true;
@@ -626,15 +626,31 @@ async fn build_server(
     })
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Cli::parse();
-
+fn main() -> Result<()> {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let registry = tracing_subscriber::registry();
+    // must start before the runtime, so its threads and panics are covered
+    let _sentry = libsql_server::error_reporting::init();
+
+    let res = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run());
+
+    if let Err(e) = &res {
+        sentry::integrations::anyhow::capture_anyhow(e);
+    }
+
+    res
+}
+
+async fn run() -> Result<()> {
+    let args = Cli::parse();
+
+    let registry = tracing_subscriber::registry()
+        .with(libsql_server::error_reporting::tracing_layer());
 
     #[cfg(feature = "debug-tools")]
     let registry = registry.with(console_subscriber::spawn());

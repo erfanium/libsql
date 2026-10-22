@@ -69,7 +69,7 @@ where
                     let Some(maybe_req) = maybe_req else { break };
                     match maybe_req {
                         Err(e) => {
-                            tracing::error!("stream error: {e}");
+                            tracing::warn!("stream error: {e}");
                             break
                         }
                         Ok(req) => {

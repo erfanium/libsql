@@ -86,7 +86,7 @@ impl Scheduler {
                         tracing::error!("scheduler could not make progress after {MAX_ERROR_RETRIES}, exiting: {e}");
                         break;
                     } else {
-                        tracing::error!("an error occured while stepping the scheduler, {} tries remaining: {e}", MAX_ERROR_RETRIES - tries);
+                        tracing::warn!("an error occured while stepping the scheduler, {} tries remaining: {e}", MAX_ERROR_RETRIES - tries);
                         tries += 1;
                     }
                 }
@@ -467,7 +467,7 @@ async fn try_step_task(
     let (task, error) = tokio::task::spawn_blocking(move || {
         let mut conn = migration_db.lock();
         if let Err(e) = update_meta_task_status(&mut conn, &task, error.as_deref()) {
-            tracing::error!("failed to update task status, retryng later: {e}");
+            tracing::warn!("failed to update task status, retryng later: {e}");
             *task.status_mut() = old_status;
         }
         (task, error)

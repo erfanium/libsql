@@ -226,7 +226,7 @@ impl IntoResponse for &Error {
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
-        tracing::error!("IO error reported: {:?}", value);
+        tracing::warn!("IO error reported: {:?}", value);
 
         Error::IOError(value)
     }

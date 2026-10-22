@@ -121,6 +121,19 @@ container networking level.
 Defines the GRPC listen address and port for sqld. Primarily used for
 inter-node communication. Recommended to leave this on default.
 
+### `SENTRY_DSN`
+
+**default:** unset
+
+Reports errors to Sentry. Reporting is disabled when unset. Only issues are
+sent: `ERROR`-level logs, panics and fatal startup errors. No performance
+tracing, spans or logs. Failed API requests are reported, 4xx included. SQL
+syntax errors are not, since they are returned to the client and carry query
+text.
+
+`SENTRY_ENVIRONMENT` sets the environment name. `SENTRY_RELEASE` overrides the
+release, which defaults to `libsql-server@<version>`.
+
 ## Docker Compose
 
 Simple docker compose for local development:

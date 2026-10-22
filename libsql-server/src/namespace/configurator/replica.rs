@@ -130,7 +130,7 @@ impl ConfigureNamespace for ReplicaConfigurator {
                             // ignore this error (still log it) and don't destroy the local
                             // namespace data on the replica. This trades off storage space for
                             // returing 500s.
-                            tracing::error!("namespace {namespace} doesn't exist, trying to replicate again...");
+                            tracing::warn!("namespace {namespace} doesn't exist, trying to replicate again...");
                             // tracing::error!("namespace {namespace} doesn't exist, destroying...");
                             // (reset)(ResetOp::Destroy(namespace.clone()));
                             // Err(err)?;

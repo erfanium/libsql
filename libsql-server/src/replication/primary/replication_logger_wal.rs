@@ -63,6 +63,7 @@ impl<W: Wal> WrapWal<W> for ReplicationLoggerWalWrapper {
                 tracing::error!(
                     "fatal error: log failed to commit: inconsistent replication log: {e}"
                 );
+                crate::error_reporting::flush();
                 std::process::abort();
             }
 
@@ -73,6 +74,7 @@ impl<W: Wal> WrapWal<W> for ReplicationLoggerWalWrapper {
                 .maybe_compact(self.logger.compactor().clone(), self.logger.db_path())
             {
                 tracing::error!("fatal error: {e}, exiting");
+                crate::error_reporting::flush();
                 std::process::abort()
             }
         }

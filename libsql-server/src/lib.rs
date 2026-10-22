@@ -64,6 +64,7 @@ use self::schema::SchedulerHandle;
 mod broadcaster;
 pub mod config;
 pub mod connection;
+pub mod error_reporting;
 pub mod net;
 pub mod rpc;
 pub mod version;
@@ -726,10 +727,12 @@ where
                     }
                     Ok(Err(e)) => {
                         tracing::error!("failed to shutdown gracefully: {}", e);
+                        crate::error_reporting::flush();
                         std::process::exit(1);
                     },
                     Err(_) => {
                         tracing::error!("shutdown timeout hit, forcefully shutting down");
+                        crate::error_reporting::flush();
                         std::process::exit(1);
                     },
 

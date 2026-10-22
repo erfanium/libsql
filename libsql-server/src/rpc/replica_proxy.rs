@@ -44,7 +44,7 @@ impl Proxy for ReplicaProxyService {
                     Ok(it) => yield it,
                     Err(e) => {
                         // close the stream on error
-                        tracing::error!("error proxying stream request: {e}");
+                        tracing::warn!("error proxying stream request: {e}");
                         break
                     },
                 }
