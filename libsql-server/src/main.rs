@@ -96,9 +96,6 @@ struct Cli {
     #[clap(long)]
     primary_grpc_ca_cert_file: Option<PathBuf>,
 
-    /// Don't display welcome message
-    #[clap(long)]
-    no_welcome: bool,
     #[clap(long, env = "SQLD_ENABLE_BOTTOMLESS_REPLICATION")]
     enable_bottomless_replication: bool,
     /// The duration, in second, after which to shutdown the server if no request have been
@@ -277,51 +274,6 @@ struct Cli {
     /// Disable prometheus metrics collection
     #[clap(long, env = "LIBSQL_DISABLE_METRICS")]
     disable_metrics: bool,
-}
-
-impl Cli {
-    #[rustfmt::skip]
-    fn print_welcome_message(&self) {
-        // no welcome :'(
-        if self.no_welcome { return }
-
-        eprintln!(r#"           _     _ "#);
-        eprintln!(r#" ___  __ _| | __| |"#);
-        eprintln!(r#"/ __|/ _` | |/ _` |"#);
-        eprintln!(r#"\__ \ (_| | | (_| |"#);
-        eprintln!(r#"|___/\__, |_|\__,_|"#);
-        eprintln!(r#"        |_|        "#);
-
-        eprintln!();
-        eprintln!("Welcome to sqld!");
-        eprintln!();
-        eprintln!("version: {}", env!("CARGO_PKG_VERSION"));
-        if env!("VERGEN_GIT_SHA") != "VERGEN_IDEMPOTENT_OUTPUT" {
-            eprintln!("commit SHA: {}", env!("VERGEN_GIT_SHA"));
-        }
-        eprintln!("build date: {}", env!("VERGEN_BUILD_DATE"));
-        eprintln!();
-        eprintln!("This software is in BETA version.");
-        eprintln!("If you encounter any bug, please open an issue at https://github.com/tursodatabase/libsql/issues");
-        eprintln!();
-
-        eprintln!("config:");
-
-        eprint!("\t- mode: ");
-        match (&self.grpc_listen_addr, &self.primary_grpc_url) {
-            (None, None) => eprintln!("standalone"),
-            (Some(addr), None) => eprintln!("primary ({addr})"),
-            (None, Some(url)) => eprintln!("replica (primary at {url})"),
-            _ => unreachable!("invalid configuration!"),
-        };
-        eprintln!("\t- database path: {}", self.db_path.display());
-        let extensions_str = self.extensions_path.clone().map_or("<disabled>".to_string(), |x| x.display().to_string());
-        eprintln!("\t- extensions path: {extensions_str}");
-        eprintln!("\t- listening for HTTP requests on: {}", self.http_listen_addr);
-        eprintln!("\t- grpc_tls: {}", if self.grpc_tls { "yes" } else { "no" });
-        #[cfg(feature = "encryption")]
-        eprintln!("\t- encryption at rest: {}", if self.encryption_key.is_some() { "enabled" } else { "disabled" });
-    }
 }
 
 #[cfg(feature = "debug-tools")]
@@ -674,7 +626,6 @@ async fn run() -> Result<()> {
         )
         .init();
 
-    args.print_welcome_message();
     let server = build_server(&args, set_log_level).await?;
     server.start().await?;
 
