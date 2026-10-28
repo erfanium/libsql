@@ -9,7 +9,9 @@ use utoipa::{Modify, OpenApi};
 
 use crate::replication::ReplicationInfo;
 
-use super::{stats, CreateNamespaceReq, HttpDatabaseConfig};
+use super::{
+    stats, CreateNamespaceReq, HttpDatabaseConfig, ListNamespacesResp, NamespaceListEntry,
+};
 
 /// Every handler of the admin router is listed here: one that is not does not show in the docs.
 #[derive(OpenApi)]
@@ -19,6 +21,7 @@ use super::{stats, CreateNamespaceReq, HttpDatabaseConfig};
         description = "Management of the namespaces of a sqld server. Every request carries the admin key as a bearer token."
     ),
     paths(
+        super::handle_list_namespaces,
         super::handle_create_namespace,
         super::handle_get_config,
         super::handle_post_config,
@@ -34,7 +37,13 @@ use super::{stats, CreateNamespaceReq, HttpDatabaseConfig};
         super::disable_profile_heap,
         super::delete_profile_heap,
     ),
-    components(schemas(CreateNamespaceReq, HttpDatabaseConfig, ReplicationInfo)),
+    components(schemas(
+        CreateNamespaceReq,
+        HttpDatabaseConfig,
+        ListNamespacesResp,
+        NamespaceListEntry,
+        ReplicationInfo
+    )),
     modifiers(&AdminKey)
 )]
 struct ApiDoc;

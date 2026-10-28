@@ -576,6 +576,56 @@ impl MetaStore {
         Ok(())
     }
 
+    /// A page of up to `limit` namespaces, in name order, starting right after `after`, and the
+    /// cursor of the next page if there may be one. Read from the table rather than the in-memory
+    /// map, which can hold entries for namespaces that were never created.
+    pub async fn list(
+        &self,
+        after: Option<String>,
+        limit: u64,
+    ) -> crate::Result<(Vec<(NamespaceName, DatabaseConfig)>, Option<String>)> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = inner.conn.blocking_lock();
+            let mut stmt = conn.prepare_cached(
+                "SELECT namespace, config FROM namespace_configs
+                WHERE namespace > ?1 ORDER BY namespace LIMIT ?2",
+            )?;
+            let rows = stmt.query_map((after.as_deref().unwrap_or(""), limit), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+
+            let mut namespaces = Vec::new();
+            let mut scanned = 0;
+            let mut last = None;
+            for row in rows {
+                let (name, config) = row?;
+                scanned += 1;
+                last = Some(name.clone());
+                let name = match NamespaceName::from_string(name) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        tracing::warn!("unable to convert namespace name: {}", e);
+                        continue;
+                    }
+                };
+                let config = match metadata::DatabaseConfig::decode(&config[..]) {
+                    Ok(c) => DatabaseConfig::from(&c),
+                    Err(e) => {
+                        tracing::warn!("unable to decode config of `{name}`: {e}");
+                        continue;
+                    }
+                };
+                namespaces.push((name, config));
+            }
+            // a full page means there may be more; the cursor is the last row scanned, kept or not
+            let next = if scanned == limit { last } else { None };
+            Ok((namespaces, next))
+        })
+        .await
+        .unwrap()
+    }
+
     pub async fn get_migrations_summary(
         &self,
         schema: NamespaceName,

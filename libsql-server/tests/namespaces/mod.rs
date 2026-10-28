@@ -135,3 +135,63 @@ fn delete_namespace() {
 
     sim.run().unwrap();
 }
+
+#[test]
+fn list_namespaces() {
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(1000))
+        .build();
+    let tmp = tempdir().unwrap();
+    make_primary(&mut sim, tmp.path().to_path_buf());
+
+    sim.client("client", async {
+        let client = Client::new();
+        for ns in ["foo", "bar", "baz"] {
+            client
+                .post(
+                    &format!("http://primary:8080/v1/namespaces/{ns}/create"),
+                    json!({}),
+                )
+                .await?;
+        }
+
+        let page = client
+            .get("http://primary:8080/v1/namespaces?limit=2")
+            .await?
+            .json_value()
+            .await?;
+        let names: Vec<_> = page["namespaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["bar", "baz"]);
+        assert_eq!(page["next"], "baz");
+        assert_eq!(page["namespaces"][0]["is_shared_schema"], false);
+
+        let page = client
+            .get("http://primary:8080/v1/namespaces?limit=2&after=baz")
+            .await?
+            .json_value()
+            .await?;
+        assert_eq!(page["namespaces"][0]["name"], "foo");
+        assert_eq!(page["namespaces"].as_array().unwrap().len(), 1);
+        assert!(page["next"].is_null());
+
+        // a deleted namespace is no longer listed
+        client
+            .delete("http://primary:8080/v1/namespaces/foo", json!({}))
+            .await?;
+        let page = client
+            .get("http://primary:8080/v1/namespaces")
+            .await?
+            .json_value()
+            .await?;
+        assert_eq!(page["namespaces"].as_array().unwrap().len(), 2);
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}

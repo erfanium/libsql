@@ -1,5 +1,5 @@
 use axum::body::StreamBody;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::middleware::Next;
 use axum::routing::delete;
 use axum::Json;
@@ -55,6 +55,7 @@ where
 
     use axum::routing::{get, post};
     let router = axum::Router::new()
+        .route("/v1/namespaces", get(handle_list_namespaces))
         .route(
             "/v1/namespaces/:namespace/config",
             get(handle_get_config).post(handle_post_config),
@@ -123,6 +124,70 @@ async fn auth_middleware<B>(
     }
 
     Ok(next.run(request).await)
+}
+
+const DEFAULT_LIST_LIMIT: u64 = 100;
+const MAX_LIST_LIMIT: u64 = 1000;
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+struct ListNamespacesParams {
+    /// Cursor: list the namespaces whose name sorts after this one. Pass the `next` of the
+    /// previous page.
+    after: Option<String>,
+    /// Page size, 100 by default and at most 1000.
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+struct ListNamespacesResp {
+    namespaces: Vec<NamespaceListEntry>,
+    /// Cursor of the next page, absent on the last one.
+    next: Option<String>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+struct NamespaceListEntry {
+    name: String,
+    /// The namespace is a shared schema database: its schema changes go to the databases linked
+    /// to it.
+    is_shared_schema: bool,
+    /// The shared schema database this namespace is linked to, if any: its schema changes are
+    /// meant to come from there.
+    shared_schema_name: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/namespaces",
+    tag = "namespaces",
+    summary = "List the namespaces, in name order, a page at a time",
+    params(ListNamespacesParams),
+    responses((status = 200, body = ListNamespacesResp)),
+    security(("admin_key" = [])),
+)]
+async fn handle_list_namespaces<C>(
+    State(app_state): State<Arc<AppState<C>>>,
+    Query(params): Query<ListNamespacesParams>,
+) -> crate::Result<Json<ListNamespacesResp>> {
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_LIST_LIMIT)
+        .clamp(1, MAX_LIST_LIMIT);
+    let (page, next) = app_state
+        .namespaces
+        .meta_store()
+        .list(params.after, limit)
+        .await?;
+    let namespaces = page
+        .into_iter()
+        .map(|(name, config)| NamespaceListEntry {
+            name: name.to_string(),
+            is_shared_schema: config.is_shared_schema,
+            shared_schema_name: config.shared_schema_name.map(|n| n.to_string()),
+        })
+        .collect();
+    Ok(Json(ListNamespacesResp { namespaces, next }))
 }
 
 #[utoipa::path(
