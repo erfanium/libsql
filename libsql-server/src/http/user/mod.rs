@@ -2,6 +2,7 @@ pub mod db_factory;
 mod dump;
 mod extract;
 mod listen;
+mod load;
 mod result_builder;
 mod sync;
 mod trace;
@@ -297,6 +298,7 @@ where
                 .route("/console", get(show_console))
                 .route("/health", get(handle_health))
                 .route("/dump", get(dump::handle_dump))
+                .route("/v1/load", post(load::handle_load))
                 .route("/beta/listen", get(listen::handle_listen))
                 .route("/v2", get(crate::hrana::http::handle_index))
                 .route(

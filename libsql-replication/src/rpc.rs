@@ -105,3 +105,8 @@ pub mod metadata {
     #![allow(clippy::all)]
     include!("generated/metadata.rs");
 }
+
+pub mod load {
+    #![allow(clippy::all)]
+    include!("generated/load.rs");
+}

@@ -27,6 +27,7 @@ use self::program::{Cond, DescribeResponse, Program, Step};
 pub mod config;
 mod connection_core;
 pub mod connection_manager;
+pub mod bulk_load;
 pub mod dump;
 pub mod legacy;
 pub mod program;

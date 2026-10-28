@@ -6,6 +6,7 @@ fn bootstrap() {
         "proto/metadata.proto",
         "proto/replication_log.proto",
         "proto/proxy.proto",
+        "proto/load.proto",
     ];
     let dirs = &["proto"];
 

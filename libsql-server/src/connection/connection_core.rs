@@ -262,7 +262,7 @@ impl<W: Wal + Send + 'static> CoreConnection<W> {
     }
 
     pub(super) fn force_rollback(&mut self) {
-        if !self.forced_rollback {
+        if !self.forced_rollback && !self.conn.is_autocommit() {
             self.rollback();
             self.forced_rollback = true;
         }

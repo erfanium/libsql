@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package load;
+
+// Body of `POST /v1/load`: a sequence of length-delimited (varint length prefix) LoadFrame
+// messages. The whole stream is applied in one transaction, committed only on End.
+message LoadFrame {
+  oneof kind {
+    Table table = 1;
+    Rows rows = 2;
+    End end = 3;
+  }
+}
+
+// Declares a target table; its rows are written with
+// `INSERT OR REPLACE INTO name (columns...) VALUES (?...)`.
+message Table {
+  uint32 id = 1;
+  string name = 2;
+  repeated string columns = 3;
+}
+
+// Row-major and flat: values.len() == row_count * columns.len() of the table.
+message Rows {
+  uint32 table_id = 1;
+  uint32 row_count = 2;
+  repeated Value values = 3;
+}
+
+// Commits the transaction. total_rows must match the number of rows received.
+message End {
+  uint64 total_rows = 1;
+}
+
+// An unset `value` is NULL.
+message Value {
+  oneof value {
+    sint64 integer = 1;
+    double real = 2;
+    string text = 3;
+    bytes blob = 4;
+  }
+}
