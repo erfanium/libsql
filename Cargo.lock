@@ -3059,6 +3059,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsql-backup"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "async-compression 0.4.11",
+ "aws-config",
+ "aws-sdk-s3",
+ "axum",
+ "bytes",
+ "chrono",
+ "clap 4.5.9",
+ "futures",
+ "humantime",
+ "libsql-rusqlite",
+ "libsql_replication",
+ "prost",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.61",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "libsql-client"
 version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4695,10 +4723,12 @@ dependencies = [
  "system-configuration",
  "tokio",
  "tokio-rustls 0.24.1",
+ "tokio-util",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 0.25.4",
  "winreg",
